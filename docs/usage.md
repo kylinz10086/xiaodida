@@ -212,6 +212,9 @@ node tools/scripts/check-secrets.mjs
 # 清洗模板里的真实密钥（一次性）
 node tools/scripts/sanitize-templates.mjs
 
+# 隔离规则回归测试（27 项断言，验证骑手看不到手机号等）
+node tools/scripts/test-isolation.cjs
+
 # 把硬编码的腾讯地图 key 抽到本地文件
 node tools/scripts/extract-map-key.mjs
 

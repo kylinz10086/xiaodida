@@ -290,8 +290,8 @@ node tools/scripts/check-all.mjs
 # 密钥扫描（提交前）
 node tools/scripts/check-secrets.mjs
 
-# 逻辑仿真（L2）
-node tools/scripts/simulate-cloud.mjs
+# 隔离规则回归测试（L2）
+node tools/scripts/test-isolation.cjs
 
 # 编译到微信小程序（L3）
 & "F:\HBuilderX.5.05.2026032417\HBuilderX\cli.exe" publish mp-weixin --project "F:\xiaodida\apps\user"
