@@ -188,3 +188,23 @@ python upload_xiaodida.py --dry-run
 - 编译产物里会内嵌该空间的 `accessKey/secretKey`（uniCloud 客户端 SDK 的正常设计），
   所以 `unpackage/` 必须在 `.gitignore` 里
 - 请求域名：`https://<spaceId>.api-hz.cloudbasefunction.cn`
+### 部署清单（别漏）
+
+登录是走 `uni-id-co` 的，它依赖一堆公共模块。**只部署 xyyx-* 会导致登录直接失败**：
+
+```
+公共模块（必须先传）：
+  uni-config-center / uni-id-common / uni-captcha / uni-cloud-s2s / uni-open-bridge-common
+  + 自己的 xyyx-common
+
+云函数：
+  uni-id-co   ← 登录/注册/绑定手机号，漏了它登录必失败
+  xyyx-user / xyyx-rider / xyyx-pay / xyyx-cron
+```
+
+核对命令：
+
+```powershell
+& $cli cloud functions --list cloudfunction --prj user --provider alipay --cloud
+# 应看到 uni-id-co + xyyx-user/rider/pay/cron
+```
