@@ -261,10 +261,14 @@ async function ensureProfile(uid, patch = {}) {
     return exists
   }
 
+  // 微信登录拿不到昵称头像了（getUserProfile 已废弃），
+  // 新用户给一个默认昵称，避免"登录成功了但资料一片空白"看起来像没登录。
+  const defaultNick = '同学' + String(Math.floor(1000 + Math.random() * 9000))
+
   const doc = {
     _id: uid,
     role: ROLE.USER,
-    nickname: '',
+    nickname: defaultNick,
     avatar: '',
     mobile: '',
     school: SCHOOL,

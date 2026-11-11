@@ -1,0 +1,7 @@
+{
+  "name": "z-test-prepare",
+  "version": "1.0.0",
+  "description": "临时：把一条测试订单的发布者改掉，供骑手链路验证",
+  "main": "index.js",
+  "dependencies": {}
+}
