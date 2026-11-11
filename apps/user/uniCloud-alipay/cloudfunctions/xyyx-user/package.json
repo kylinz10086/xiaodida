@@ -1,7 +1,9 @@
 {
   "name": "xyyx-user",
   "version": "1.0.0",
-  "description": "校递达用户端云对象",
+  "description": "校递达云对象/云函数 xyyx-user",
   "main": "index.obj.js",
-  "dependencies": {}
+  "dependencies": {
+    "xyyx-common": "file:../common/xyyx-common"
+  }
 }

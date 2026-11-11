@@ -117,3 +117,29 @@ CLI / 自动化要用它，不开的话我这边没法帮你出预览二维码�
 
 uniCloud 控制台 → 云数据库 → 分别清空 `xyyx-tasks`、`xyyx-transactions`、`xyyx-wallets`（保留 `xyyx-users`），
 再把 `xyyx-users` 里自己的 `rider_status` 归零即可重来。
+
+---
+
+## 八、第一次跑不起来？先看域名校验
+
+uniCloud 的请求域名是：
+
+```
+https://env-00jy72ju8b4z.api-hz.cloudbasefunction.cn
+```
+
+**开发者工具里**（本地调试）：
+
+1. 右上角 **详情**
+2. **本地设置**
+3. 勾选 **「不校验合法域名、web-view（业务域名）、TLS 版本以及 HTTPS 证书」**
+
+不勾的话所有云对象调用都会返回 `[xyyx-user]: request:fail`。
+
+**真机 / 上线**（必须做）：
+
+微信公众平台 → 开发管理 → 开发设置 → **服务器域名** → request 合法域名里加上
+`https://env-00jy72ju8b4z.api-hz.cloudbasefunction.cn`，否则真机上一样调不通。
+
+> 顺带说明：编译产物 `unpackage/` 里会内嵌该空间的 accessKey/secretKey（uniCloud 客户端 SDK 的正常设计），
+> 所以 `unpackage/` 必须在 `.gitignore` 里，不能提交。

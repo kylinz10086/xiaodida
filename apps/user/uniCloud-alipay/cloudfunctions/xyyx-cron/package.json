@@ -1,7 +1,9 @@
 {
   "name": "xyyx-cron",
   "version": "1.0.0",
-  "description": "校递达定时任务：自动确认收货 + 清理过期 nonce",
+  "description": "校递达云对象/云函数 xyyx-cron",
   "main": "index.js",
-  "dependencies": {}
+  "dependencies": {
+    "xyyx-common": "file:../common/xyyx-common"
+  }
 }

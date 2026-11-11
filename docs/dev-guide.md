@@ -169,3 +169,22 @@ python upload_xiaodida.py --dry-run
 | HBuilderX 切换云服务商 | 目录被改名 `uniCloud-aliyun` → `uniCloud-alipay` | 脚本里自动探测 `uniCloud-*` |
 | CLI 报 `appid 不存在` | manifest 的 `__UNI__xxx` 不是账号下真实 appid | 用已注册的 appid |
 | `--assignspace` 找不到空间 | 空间未进 HBuilderX 缓存 | 只能在 UI 里刷新空间列表并绑定 |
+
+---
+
+## 十、部署踩坑补充（2026-11-11 实测）
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 云对象报「用户函数代码语法或逻辑异常」 | 云函数 `require('xyyx-common')` 找不到公共模块 | 每个云函数的 `package.json` 必须写 `"xyyx-common": "file:../common/xyyx-common"`；`xyyx-common` 自己也要写 `"uni-id-common": "file:../uni-id-common"` |
+| 未登录调用返回「函数异常」而不是 401 | 云对象方法直接抛 BizError | 导出时统一包一层 `C.guard(fn)`，把业务异常转成 `{code,msg}` |
+| 云对象 `request:fail` | 开发者工具校验合法域名 | `unpackage/.../project.private.config.json` 的 `urlCheck` 改 `false`（它会覆盖 `project.config.json`）；真机还要在微信后台加请求域名 |
+| `--upload db` 报 `paths[3] must be string` | 没给 `--name` | `--name xyyx-users.schema.json`（必须带扩展名） |
+| `.index.json` 传不上去 | CLI 只接受 `.schema.json` | 索引去 uniCloud 网页控制台建 |
+
+### 支付宝云的额外注意
+
+- 目录名是 `uniCloud-alipay`，CLI 的 `--provider` 是 `alipay`
+- 编译产物里会内嵌该空间的 `accessKey/secretKey`（uniCloud 客户端 SDK 的正常设计），
+  所以 `unpackage/` 必须在 `.gitignore` 里
+- 请求域名：`https://<spaceId>.api-hz.cloudbasefunction.cn`

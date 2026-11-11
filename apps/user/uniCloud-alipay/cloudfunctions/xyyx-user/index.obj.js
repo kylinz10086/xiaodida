@@ -39,7 +39,7 @@ function normalizePlace(obj) {
   }
 }
 
-module.exports = {
+const api = {
   /* ---------------- 资料 ---------------- */
 
   async getProfile() {
@@ -255,3 +255,7 @@ module.exports = {
     return C.ok(null, '已同意')
   }
 }
+
+// 统一兜底：把业务异常(BizError)转成 { code, msg }，未知异常压成 500，
+// 否则云函数会直接把异常抛给客户端，前端只能看到「用户函数代码异常」。
+module.exports = Object.fromEntries(Object.entries(api).map(([k, fn]) => [k, C.guard(fn)]))

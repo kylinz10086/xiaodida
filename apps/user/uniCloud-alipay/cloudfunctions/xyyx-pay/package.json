@@ -1,7 +1,9 @@
 {
   "name": "xyyx-pay",
   "version": "1.0.0",
-  "description": "校递达支付云对象（微信支付 V3 / mock）",
+  "description": "校递达云对象/云函数 xyyx-pay",
   "main": "index.obj.js",
-  "dependencies": {}
+  "dependencies": {
+    "xyyx-common": "file:../common/xyyx-common"
+  }
 }

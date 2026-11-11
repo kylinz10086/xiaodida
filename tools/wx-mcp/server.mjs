@@ -24,8 +24,8 @@ const REPO = process.env.WX_REPO || 'F:\\xiaodida'
 const WX_CLI = process.env.WX_CLI || 'F:\\微信web开发者工具\\cli.bat'
 const HBX_CLI = process.env.HBX_CLI || 'F:\\HBuilderX.5.05.2026032417\\HBuilderX\\cli.exe'
 const DEFAULT_PROJECT = process.env.WX_PROJECT || path.join(REPO, 'miniprogram')
-const UNI_DIST = process.env.WX_UNI_DIST || path.join(REPO, '校递达app客户端', 'unpackage', 'dist', 'dev', 'mp-weixin')
-const UNI_SRC = process.env.WX_UNI_SRC || path.join(REPO, '校递达app客户端')
+const UNI_DIST = process.env.WX_UNI_DIST || path.join(REPO, 'apps', 'user', 'unpackage', 'dist', 'dev', 'mp-weixin')
+const UNI_SRC = process.env.WX_UNI_SRC || path.join(REPO, 'apps', 'user')
 const LOG_DIR = path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'cache', 'wx-mcp')
 const MAX_TEXT = 12000
 

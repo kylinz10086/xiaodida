@@ -106,7 +106,7 @@ async function markPaid(taskId, transactionId, payMode) {
   return { alreadyPaid: false }
 }
 
-module.exports = {
+const api = {
   /** 支付模式探测，客户端用它决定显示「微信支付」还是「模拟支付」 */
   async getPayMode() {
     return C.ok({ mode: isRealPay() ? 'wechat' : 'mock' })
@@ -232,3 +232,7 @@ module.exports = {
     return C.ok(null, 'ok')
   }
 }
+
+// 统一兜底：把业务异常(BizError)转成 { code, msg }，未知异常压成 500，
+// 否则云函数会直接把异常抛给客户端，前端只能看到「用户函数代码异常」。
+module.exports = Object.fromEntries(Object.entries(api).map(([k, fn]) => [k, C.guard(fn)]))
