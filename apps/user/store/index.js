@@ -3,6 +3,9 @@ import Vuex from 'vuex'
 
 Vue.use(Vuex)
 
+// 骑手身份的数据层（一个 App 两种身份）
+import rider from './rider'
+
 /**
  * 用户端数据层
  *
@@ -70,6 +73,7 @@ function mapTask(t) {
 }
 
 const store = new Vuex.Store({
+  modules: { rider },
   state: {
     vuex_user: lifeData.vuex_user ? lifeData.vuex_user : { id: '', name: '', usertype: 0 },
     vuex_token: lifeData.vuex_token ? lifeData.vuex_token : '',

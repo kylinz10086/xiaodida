@@ -105,6 +105,38 @@
 			}
 		},
 		{
+			"path": "pages/rider/center",
+			"style": {
+				"navigationBarTitleText": "骑手中心"
+			}
+		},
+		{
+			"path": "pages/rider/workbench",
+			"style": {
+				"navigationBarTitleText": "骑手工作台",
+				"enablePullDownRefresh": true,
+				"backgroundTextStyle": "dark"
+			}
+		},
+		{
+			"path": "pages/rider/detail",
+			"style": {
+				"navigationBarTitleText": "任务详情"
+			}
+		},
+		{
+			"path": "pages/rider/wallet",
+			"style": {
+				"navigationBarTitleText": "我的收入"
+			}
+		},
+		{
+			"path": "pages/rider/apply",
+			"style": {
+				"navigationBarTitleText": "申请成为骑手"
+			}
+		},
+		{
 			"path": "pages/oyyl-index/oyyl-index",
 			"style": {
 				"navigationBarTitleText": "首页"

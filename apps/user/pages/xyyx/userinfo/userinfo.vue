@@ -81,6 +81,17 @@
 			</view>
 		</view>
 		
+		<!-- 骑手中心：一个 App 两种身份，切过去就能接单 -->
+		<view class="menu-section">
+			<view class="menu-item" @click="goRiderCenter">
+				<text class="menu-label">🛵 骑手中心</text>
+				<view class="menu-right">
+					<text class="menu-value">{{ riderStatusText }}</text>
+					<text class="arrow">›</text>
+				</view>
+			</view>
+		</view>
+		
 		<view class="menu-section">
 			<view class="menu-item" @click="goToPage('privacy')">
 				<text class="menu-label">隐私政策</text>
@@ -183,6 +194,12 @@ export default {
 	},
 	computed: {
 		...mapGetters(['getUserStats']),
+		/** 骑手身份（0未申请 1审核中 2已通过 3已拒绝） */
+		riderStatusText() {
+			const map = { 0: '未开通', 1: '审核中', 2: '已认证', 3: '未通过' }
+			const p = this.userInfo || {}
+			return map[p.rider_status] || '未开通'
+		},
 		userStats() {
 			return this.getUserStats || {
 				published_count: 0,
@@ -211,6 +228,10 @@ export default {
 	},
 	methods: {
 		...mapActions(['fetchUserInfo', 'updateUserInfo']),
+		/** 进入骑手中心（同一 App 的另一重身份） */
+		goRiderCenter() {
+			uni.navigateTo({ url: '/pages/rider/center' })
+		},
 		async loadUserInfo() {
 			if (!this.isLoggedIn) return
 			

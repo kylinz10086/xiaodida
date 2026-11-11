@@ -1,7 +1,9 @@
 # 校递达 · 校园跑腿小程序
 
 浙江中医药大学的校园快递代取 / 代带餐食互助平台。
-**两个小程序**（用户端 + 骑手端）+ **uniCloud 后端**，资金走「预付托管」模式。
+**一个小程序，进去选身份**（用户 / 骑手）+ **uniCloud 后端（支付宝云）**，资金走「预付托管」模式。
+
+> 想直接体验：看 [docs/try-it.md](docs/try-it.md)
 
 ```
 用户下单付款 ──▶ 平台托管 ──▶ 骑手接单 ──▶ 送达 ──▶ 用户确认 ──▶ 结算（平台抽佣 10%）
@@ -17,7 +19,7 @@ xiaodida/
 ├── README.md
 ├── docs/                   ← 使用文档、安全说明、数据模型、资金口径
 ├── apps/
-│   ├── user/               ← 用户端（uni-app + uView）
+│   ├── user/               ← 小程序主工程（用户 + 骑手两种身份）
 │   │   ├── pages/xyyx/     首页 / 发布 / 详情 / 订单 / 我的 / 协议
 │   │   ├── store/          Vuex，只调云对象 xyyx-user
 │   │   └── uniCloud-aliyun/  ★ 后端唯一源码
@@ -27,7 +29,7 @@ xiaodida/
 │   │       │   ├── xyyx-rider/           骑手端云对象
 │   │       │   └── xyyx-pay/             微信支付 V3 / mock
 │   │       └── database/                 8 张表 schema + 索引
-│   └── rider/              ← 骑手端（uni-app，无 uView，更轻）
+│   └── rider/              ← 原独立骑手端（已合并进 apps/user/pages/rider，仅存档）
 ├── admin/                  ← 后台管理（uni-admin 模板，业务页待做）
 ├── reference/              ← uni-id 登录模板（参考，不部署）
 ├── tools/
