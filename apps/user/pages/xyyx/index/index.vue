@@ -7,15 +7,21 @@
 					<text class="hero-title">校递达</text>
 					<text class="hero-sub">校园快递 · 代取带餐 · 同校互助</text>
 				</view>
-				<view class="hero-badge" @click="goMine">
+				<view class="hero-badge" @click="loggedIn ? goMine() : openLogin()">
 					<text class="badge-dot"></text>
-					<text>{{ isLoggedIn ? '已登录' : '未登录' }}</text>
+					<text>{{ loggedIn ? '已登录' : '未登录' }}</text>
 				</view>
 			</view>
 			<view class="hero-school">
 				<text class="dot"></text>
 				<text>{{ school }}</text>
 			</view>
+		</view>
+
+		<!-- 未登录提示 -->
+		<view class="login-bar" v-if="!loggedIn" @click="openLogin">
+			<text class="login-bar-text">登录后才能发单、接单、收款</text>
+			<text class="login-bar-btn">去登录 ›</text>
 		</view>
 
 		<!-- 快捷发布 -->
@@ -93,15 +99,13 @@
 	import { mapGetters, mapActions } from 'vuex'
 	import MissionListItem from '../components/mission-list-item.vue'
 	import WechatLoginModal from '@/components/wechat-login-modal/wechat-login-modal.vue'
-	import { requireLogin, isLoggedIn } from '@/common/auth.js'
+	import { isLoggedIn, goLogin } from '@/common/auth.js'
 
 	export default {
 		components: { MissionListItem, WechatLoginModal },
 		computed: {
 			...mapGetters(['getTaskList', 'school']),
-			isLoggedIn() {
-				return !!(uni.getStorageSync('uniIdToken') || uni.getStorageSync('token'))
-			},
+
 			orderList() {
 				let list = (this.getTaskList || []).map((task) => ({
 					id: task._id || task.id,
@@ -131,8 +135,8 @@
 			}
 		},
 		onShow() {
-			// 没登录先去登录，登录成功会自动回到这里
-			if (!requireLogin()) return
+			// 注意：这里不能用 computed + uni.getStorageSync（不响应式，登录后不刷新）
+			this.loggedIn = isLoggedIn()
 			this.checkAgreement()
 			this.loadTaskList()
 		},
@@ -173,7 +177,7 @@
 			},
 
 			clickReleaseRequirments(num) {
-				if (!this.isLoggedIn) {
+				if (!this.loggedIn) {
 					this.showLoginModal = true
 					this.pendingAction = { type: 'release', num }
 					return
@@ -197,6 +201,10 @@
 				}
 			},
 
+			openLogin() {
+				goLogin()
+			},
+
 			goToSearch() {
 				uni.navigateTo({ url: '/pages/xyyx/search/search' })
 			},
@@ -217,6 +225,7 @@
 		},
 		data() {
 			return {
+				loggedIn: false,
 				showLoginModal: false,
 				pendingAction: null,
 				sortType: 'time',
@@ -294,6 +303,29 @@
 		border-radius: 50%;
 		background: #FFD60A;
 		margin-right: 10rpx;
+	}
+
+	/* 未登录提示 */
+	.login-bar {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		margin: -20rpx 24rpx 0;
+		padding: 22rpx 26rpx;
+		background: #FFF7E6;
+		border: 1rpx solid #FFE0A3;
+		border-radius: 18rpx;
+	}
+
+	.login-bar-text {
+		font-size: 26rpx;
+		color: #AD6800;
+	}
+
+	.login-bar-btn {
+		font-size: 26rpx;
+		font-weight: 600;
+		color: #AD6800;
 	}
 
 	/* 快捷发布 */

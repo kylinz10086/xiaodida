@@ -1,6 +1,6 @@
 <template>
 	<view class="page-container">
-		<view class="user-header" :class="{'logged-in': isLoggedIn}">
+		<view class="user-header" :class="{'logged-in': loggedIn}">
 			<view class="header-bg"></view>
 			<view class="header-content">
 				<view class="user-info" @click="handleUserClick">
@@ -9,12 +9,12 @@
 						<view class="avatar-border"></view>
 					</view>
 					<view class="user-text">
-						<text class="nickname">{{ isLoggedIn ? (userInfo.nickname || '微信用户') : '点击登录' }}</text>
-						<text class="user-id" v-if="isLoggedIn && userInfo.mobile">{{ maskMobile(userInfo.mobile) }}</text>
-						<text class="user-id" v-else-if="!isLoggedIn">登录后享受更多服务</text>
+						<text class="nickname">{{ loggedIn ? (userInfo.nickname || '微信用户') : '点击登录' }}</text>
+						<text class="user-id" v-if="loggedIn && userInfo.mobile">{{ maskMobile(userInfo.mobile) }}</text>
+						<text class="user-id" v-else-if="!loggedIn">登录后享受更多服务</text>
 					</view>
 				</view>
-				<view class="header-actions" v-if="isLoggedIn">
+				<view class="header-actions" v-if="loggedIn">
 					<view class="action-item" @click="goToNotification">
 						<image class="action-icon" src="/static/icon/notification.png" mode="aspectFit"></image>
 					</view>
@@ -22,7 +22,7 @@
 			</view>
 		</view>
 		
-		<view class="stats-section" v-if="isLoggedIn">
+		<view class="stats-section" v-if="loggedIn">
 			<view class="stats-card">
 				<view class="stat-item">
 					<text class="stat-num">{{ userStats.published_count || 0 }}</text>
@@ -41,7 +41,7 @@
 			</view>
 		</view>
 		
-		<view class="order-entry-section" v-if="isLoggedIn">
+		<view class="order-entry-section" v-if="loggedIn">
 			<view class="order-entry-card" @click="goToMyOrders('published')">
 				<view class="entry-icon-wrap published">
 					<text class="entry-icon-text">发</text>
@@ -64,7 +64,7 @@
 			</view>
 		</view>
 
-		<view class="menu-section" v-if="isLoggedIn">
+		<view class="menu-section" v-if="loggedIn">
 			<view class="menu-item" @click="editField('nickname')">
 				<text class="menu-label">用户名</text>
 				<view class="menu-right">
@@ -113,7 +113,7 @@
 			</view>
 		</view>
 		
-		<view class="menu-section" v-if="isLoggedIn">
+		<view class="menu-section" v-if="loggedIn">
 			<view class="menu-item logout-btn" @click="handleLogout">
 				<text class="menu-label">退出登录</text>
 			</view>
@@ -177,6 +177,7 @@ export default {
 	},
 	data() {
 		return {
+				loggedIn: false,
 			showLoginModal: false,
 			showEditModal: false,
 			editingField: null,
@@ -208,10 +209,7 @@ export default {
 				balance: 0
 			}
 		},
-		isLoggedIn() {
-			const token = uni.getStorageSync('uniIdToken') || uni.getStorageSync('token')
-			return !!token
-		},
+
 		canConfirm() {
 			if (!this.editingValue.trim()) return false
 			if (this.editingField && this.editingField.key === 'mobile') {
@@ -224,7 +222,10 @@ export default {
 		}
 	},
 	onShow() {
-		this.loadUserInfo()
+		// 用 data 而不是 computed：uni.getStorageSync 不是响应式的，
+		// 放 computed 里会导致「登录成功后仍然显示未登录」。
+		this.loggedIn = !!(uni.getStorageSync('uniIdToken') || uni.getStorageSync('token'))
+		if (this.loggedIn) this.loadUserInfo()
 	},
 	methods: {
 		...mapActions(['fetchUserInfo', 'updateUserInfo']),
@@ -233,7 +234,7 @@ export default {
 			uni.navigateTo({ url: '/pages/rider/center' })
 		},
 		async loadUserInfo() {
-			if (!this.isLoggedIn) return
+			if (!this.loggedIn) return
 			
 			try {
 				const data = await this.fetchUserInfo()
@@ -258,7 +259,7 @@ export default {
 			}
 		},
 		handleUserClick() {
-			if (!this.isLoggedIn) {
+			if (!this.loggedIn) {
 				this.showLoginModal = true
 			} else {
 				this.chooseAvatar()
