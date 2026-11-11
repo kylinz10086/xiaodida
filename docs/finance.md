@@ -81,7 +81,7 @@ wallets.balance_cent === Σ transactions(amount_cent) where user_id = uid
 
 | 项 | 说明 |
 | --- | --- |
-| 自动确认定时任务 | `auto_confirm_at` 已写入，还需一个定时云函数扫描超时订单并结算 |
+| ~~自动确认定时任务~~ | ✅ 已实现 `xyyx-cron`（每 10 分钟扫一次 `auto_confirm_at < now` 的订单并结算，同时清理过期 nonce） |
 | 提现打款 | 目前只扣余额进冻结，需要人工在后台打款后改状态 |
 | 对账脚本 | `tools/scripts/reconcile.mjs`（按 3.3 的等式跑） |
 | 平台账户表 | 目前佣金只记流水，没有单独的 `platform` 钱包行 |

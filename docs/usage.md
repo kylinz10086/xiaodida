@@ -215,6 +215,9 @@ node tools/scripts/sanitize-templates.mjs
 # 隔离规则回归测试（27 项断言，验证骑手看不到手机号等）
 node tools/scripts/test-isolation.cjs
 
+# 资金记账测试（22 项断言：90/10 拆分、幂等、退款、对账等式）
+node tools/scripts/test-settlement.cjs
+
 # 把硬编码的腾讯地图 key 抽到本地文件
 node tools/scripts/extract-map-key.mjs
 

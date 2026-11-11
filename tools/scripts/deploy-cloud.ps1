@@ -56,7 +56,7 @@ if (-not $SkipSchema) {
 Invoke-Cli @("cloud", "functions", "--upload", "common", "--prj", $Project, "--provider", $Provider, "--name", "xyyx-common")
 
 # 3. 三个云对象
-foreach ($fn in @("xyyx-user", "xyyx-rider", "xyyx-pay")) {
+foreach ($fn in @("xyyx-user", "xyyx-rider", "xyyx-pay", "xyyx-cron")) {
     Invoke-Cli @("cloud", "functions", "--upload", "cloudfunction", "--prj", $Project, "--provider", $Provider, "--name", $fn)
 }
 
