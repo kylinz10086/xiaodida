@@ -16,6 +16,7 @@ const C = require('xyyx-common')
 const PUBLISH_ALLOWED = [
   'title',
   'type',
+  'amount',
   'description',
   'item_type',
   'item_size',
@@ -116,20 +117,6 @@ const api = {
   },
 
   /* ---------------- 支付 ---------------- */
-
-  async createPayment(taskId) {
-    const auth = await C.requireAuth(this)
-    const task = await C.getTask(C.taskIdOf(taskId))
-    C.assert(task.publisher_id === auth.uid, 403, '只能支付自己的订单')
-    C.assert(task.status === C.STATUS.PENDING, 400, '订单状态不允许支付')
-    C.assert(task.pay_status !== 'paid', 400, '订单已支付')
-
-    // 支付逻辑单独放 xyyx-pay，业务对象不碰商户密钥
-    const pay = uniCloud.importObject('xyyx-pay', { customUI: true })
-    const res = await pay.createJsapiOrder({ taskId: task._id, amountCent: task.amount_cent })
-    C.assert(res && res.code === 0, 500, (res && res.msg) || '下单失败')
-    return C.ok(res.data)
-  },
 
   /* ---------------- 大厅 ---------------- */
 

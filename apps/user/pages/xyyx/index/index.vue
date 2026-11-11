@@ -93,6 +93,7 @@
 	import { mapGetters, mapActions } from 'vuex'
 	import MissionListItem from '../components/mission-list-item.vue'
 	import WechatLoginModal from '@/components/wechat-login-modal/wechat-login-modal.vue'
+	import { requireLogin, isLoggedIn } from '@/common/auth.js'
 
 	export default {
 		components: { MissionListItem, WechatLoginModal },
@@ -130,6 +131,8 @@
 			}
 		},
 		onShow() {
+			// 没登录先去登录，登录成功会自动回到这里
+			if (!requireLogin()) return
 			this.checkAgreement()
 			this.loadTaskList()
 		},

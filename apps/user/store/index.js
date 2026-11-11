@@ -207,8 +207,13 @@ const store = new Vuex.Store({
       return created
     },
 
+    /**
+     * 发起支付：直接调 xyyx-pay（不要绕 xyyx-user）
+     * 原因：云函数里再 importObject 别的云对象时会丢掉客户端 token，
+     * 导致支付对象里所有 requireAuth 都判成「未登录」。
+     */
     async createPayment({ commit }, taskId) {
-      const res = await api().createPayment(taskId)
+      const res = await payApi().createJsapiOrder({ taskId })
       if (res.code !== 0) throw new Error(res.msg)
       commit('SET_PAY_MODE', res.data.mode)
       return res.data
