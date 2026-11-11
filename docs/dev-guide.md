@@ -208,3 +208,10 @@ python upload_xiaodida.py --dry-run
 & $cli cloud functions --list cloudfunction --prj user --provider alipay --cloud
 # 应看到 uni-id-co + xyyx-user/rider/pay/cron
 ```
+### 骑手怎么审核（冷启动）
+
+管理后台还没做，所以加了一条冷启动规则：
+**平台还没有任何一个「已通过」的骑手时，第一个提交申请的人自动通过**（`rider_status` 直接置 2）。
+之后所有申请都需要人工在 uniCloud 控制台 `xyyx-users` 里把 `rider_status` 改成 `2`。
+
+代码位置：`xyyx-rider/index.obj.js` 的 `applyRider()`。

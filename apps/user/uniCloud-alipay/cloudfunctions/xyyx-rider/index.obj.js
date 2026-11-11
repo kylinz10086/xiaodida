@@ -66,6 +66,15 @@ const api = {
       rider_status: 1,
       rider_apply_time: Date.now()
     })
+
+    // 冷启动规则：平台还没有任何一个「已通过」的骑手时，第一个申请直接通过。
+    // 否则新部署的环境没人能审核，骑手永远进不来（管理后台还没做）。
+    const approvedCount = await C.db.collection(C.COLL.users).where({ rider_status: 2 }).count()
+    if (!approvedCount.total) {
+      await C.ensureProfile(auth.uid, { rider_status: 2, rider_approved_time: Date.now() })
+      return C.ok({ status: 2, auto: true }, '你是平台第一位骑手，已自动通过审核')
+    }
+
     return C.ok({ status: 1 }, '申请已提交，等待审核')
   },
 
