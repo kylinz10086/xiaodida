@@ -26,7 +26,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$dir = Join-Path $root "apps\user\uniCloud-aliyun\cloudfunctions\common\uni-config-center\uni-id"
+$cloudDir = Get-ChildItem -Path (Join-Path $root "apps\user") -Directory -Filter "uniCloud-*" | Select-Object -First 1
+if (-not $cloudDir) { throw "找不到 apps\user\uniCloud-* 目录（是否还没关联云服务空间？）" }
+$dir = Join-Path $cloudDir.FullName "cloudfunctions\common\uni-config-center\uni-id"
 $example = Join-Path $dir "config.example.json"
 if (-not $OutFile) { $OutFile = Join-Path $dir "config.json" }
 

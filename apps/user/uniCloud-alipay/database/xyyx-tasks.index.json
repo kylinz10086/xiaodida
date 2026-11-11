@@ -1,0 +1,23 @@
+{
+  "indexes": [
+    {
+      "IndexName": "status_pay_create",
+      "MgoKeySchema": {
+        "MgoIndexKeys": [
+          { "Name": "status", "Direction": "1" },
+          { "Name": "pay_status", "Direction": "1" },
+          { "Name": "create_time", "Direction": "-1" }
+        ],
+        "MgoIsUnique": false
+      }
+    },
+    {
+      "IndexName": "publisher_id",
+      "MgoKeySchema": { "MgoIndexKeys": [{ "Name": "publisher_id", "Direction": "1" }], "MgoIsUnique": false }
+    },
+    {
+      "IndexName": "runner_id",
+      "MgoKeySchema": { "MgoIndexKeys": [{ "Name": "runner_id", "Direction": "1" }], "MgoIsUnique": false }
+    }
+  ]
+}

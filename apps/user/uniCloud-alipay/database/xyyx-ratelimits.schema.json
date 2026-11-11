@@ -1,0 +1,12 @@
+{
+  "bsonType": "object",
+  "required": ["key"],
+  "permission": { "read": false, "create": false, "update": false, "delete": false },
+  "description": "接口限流计数。按 uid+action 计窗口内次数。",
+  "properties": {
+    "_id": {},
+    "key": { "bsonType": "string", "description": "uid:action" },
+    "count": { "bsonType": "int" },
+    "reset_time": { "bsonType": "timestamp" }
+  }
+}

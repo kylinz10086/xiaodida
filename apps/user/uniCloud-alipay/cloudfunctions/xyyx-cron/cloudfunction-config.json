@@ -1,0 +1,9 @@
+{
+  "triggers": [
+    {
+      "name": "autoConfirmAndClean",
+      "type": "timer",
+      "config": "0 */10 * * * * *"
+    }
+  ]
+}

@@ -84,7 +84,8 @@ xiaodida/
 
 ### 4.1 绑定 uniCloud 空间
 
-当前空间：`env-00jy72ju8b4z`（`apps/user/manifest.json` 的 `_spaceID`）。
+当前空间：`env-00jy72ju8b4z`（**支付宝云**，`apps/user/manifest.json` 的 `_spaceID`）。
+> 注意：云服务商是支付宝云，所以目录是 `uniCloud-alipay`、CLI 的 `--provider` 是 `alipay`。
 
 如果 HBuilderX 里看不到这个空间：
 1. 打开 uniCloud 面板 → 右键刷新空间列表
@@ -144,10 +145,10 @@ node tools/scripts/check-secrets.mjs
 
 ```powershell
 $cli = "F:\HBuilderX.5.05.2026032417\HBuilderX\cli.exe"
-& $cli cloud functions --upload common --prj user --provider aliyun --name xyyx-common
-& $cli cloud functions --upload cloudfunction --prj user --provider aliyun --name xyyx-user
-& $cli cloud functions --upload cloudfunction --prj user --provider aliyun --name xyyx-rider
-& $cli cloud functions --upload cloudfunction --prj user --provider aliyun --name xyyx-pay
+& $cli cloud functions --upload common --prj user --provider alipay --name xyyx-common
+& $cli cloud functions --upload cloudfunction --prj user --provider alipay --name xyyx-user
+& $cli cloud functions --upload cloudfunction --prj user --provider alipay --name xyyx-rider
+& $cli cloud functions --upload cloudfunction --prj user --provider alipay --name xyyx-pay
 ```
 
 ### 4.4 让骑手账号能接单

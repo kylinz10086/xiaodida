@@ -29,7 +29,7 @@ logs/
 
 # ⚠️ uni-id 真实配置（appsecret / tokenSecret / pepper）
 # 仓库只保留同目录的 config.example.json；本文件留在本地供部署使用
-apps/user/uniCloud-aliyun/cloudfunctions/common/uni-config-center/uni-id/config.json
+apps/user/uniCloud-*/cloudfunctions/common/uni-config-center/uni-id/config.json
 
 # 本地覆盖配置
 *.local.json
@@ -46,4 +46,4 @@ desktop.ini
 *.swp
 
 # 微信支付真实配置（模板见 pay-config.example.js）
-apps/user/uniCloud-aliyun/cloudfunctions/xyyx-pay/pay-config.js
+apps/user/uniCloud-*/cloudfunctions/xyyx-pay/pay-config.js

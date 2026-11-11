@@ -1,0 +1,7 @@
+{
+  "name": "xyyx-rider",
+  "version": "1.0.0",
+  "description": "校递达骑手端云对象",
+  "main": "index.obj.js",
+  "dependencies": {}
+}
