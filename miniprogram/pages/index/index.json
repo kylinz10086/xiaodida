@@ -1,0 +1,10 @@
+{
+  "navigationBarTitleText": "校递达",
+  "navigationBarBackgroundColor": "#007AFF",
+  "navigationBarTextStyle": "white",
+  "enablePullDownRefresh": true,
+  "backgroundTextStyle": "dark",
+  "backgroundColor": "#007AFF",
+  "backgroundColorTop": "#007AFF",
+  "backgroundColorBottom": "#F2F2F7"
+}

@@ -1,0 +1,18 @@
+{
+	"opendb-device": {},
+	"opendb-open-data": {},
+	"opendb-verify-codes": {},
+	"uni-id-device": {},
+	"uni-id-log": {},
+	"uni-id-permissions": {},
+	"uni-id-roles": {},
+	"uni-id-users": {},
+	"xyyx-tasks": {},
+	"xyyx-users": {},
+	"xyyx-wallets": {},
+	"xyyx-transactions": {},
+	"xyyx-nonces": {},
+	"xyyx-ratelimits": {},
+	"xyyx-agreements": {},
+	"xyyx-reviews": {}
+}

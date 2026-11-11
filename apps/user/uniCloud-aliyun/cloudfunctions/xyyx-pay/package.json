@@ -1,0 +1,7 @@
+{
+  "name": "xyyx-pay",
+  "version": "1.0.0",
+  "description": "校递达支付云对象（微信支付 V3 / mock）",
+  "main": "index.obj.js",
+  "dependencies": {}
+}

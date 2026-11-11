@@ -1,0 +1,13 @@
+{
+  "bsonType": "object",
+  "required": ["user_id", "version"],
+  "permission": { "read": false, "create": false, "update": false, "delete": false },
+  "description": "用户/骑手对用户协议与隐私政策的同意记录（合规留痕）。",
+  "properties": {
+    "_id": {},
+    "user_id": { "bsonType": "string" },
+    "version": { "bsonType": "string", "maxLength": 20, "description": "协议版本号，与代码里的 AGREEMENT_VERSION 对应" },
+    "role": { "bsonType": "string", "enum": ["user", "rider"], "description": "在哪个端同意的" },
+    "create_time": { "bsonType": "timestamp" }
+  }
+}

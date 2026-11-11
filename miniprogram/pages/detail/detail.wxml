@@ -1,0 +1,96 @@
+<view class="page" wx:if="{{task}}">
+  <!-- 概览 -->
+  <view class="overview">
+    <view class="overview-top">
+      <text class="tag {{task.tagClass}}">{{task.typeText}}</text>
+      <text class="status {{task.statusClass}}">{{task.statusText}}</text>
+    </view>
+    <view class="overview-title">{{task.title}}</view>
+    <view class="overview-price">
+      <text class="price-symbol">¥</text>
+      <text class="price-value">{{task.moneyText}}</text>
+    </view>
+  </view>
+
+  <!-- 描述 -->
+  <view class="card" wx:if="{{task.description}}">
+    <view class="card-title">任务说明</view>
+    <view class="desc">{{task.description}}</view>
+  </view>
+
+  <!-- 路线 -->
+  <view class="card">
+    <view class="card-title">取送路线</view>
+    <view class="route-line">
+      <text class="point start">起</text>
+      <text class="route-text">{{task.originName}}</text>
+    </view>
+    <view class="route-line">
+      <text class="point end">终</text>
+      <text class="route-text">{{task.destinationName}}</text>
+    </view>
+  </view>
+
+  <!-- 明细 -->
+  <view class="card">
+    <view class="card-title">任务明细</view>
+    <view class="kv"><text class="kv-k">物品类型</text><text class="kv-v">{{task.itemType || '未填写'}}</text></view>
+    <view class="kv"><text class="kv-k">物品大小</text><text class="kv-v">{{task.itemSize || '未填写'}}</text></view>
+    <view class="kv"><text class="kv-k">预估重量</text><text class="kv-v">{{task.itemWeight || '未填写'}}</text></view>
+    <view class="kv"><text class="kv-k">时间要求</text><text class="kv-v">{{task.timeOption || '未填写'}}</text></view>
+    <view class="kv"><text class="kv-k">备注</text><text class="kv-v">{{task.remark || '无'}}</text></view>
+  </view>
+
+  <!-- 联系人 -->
+  <view class="card">
+    <view class="card-title">联系信息</view>
+    <view class="kv"><text class="kv-k">发布者</text><text class="kv-v">{{task.publisher_name || '校园用户'}}</text></view>
+    <view class="kv" wx:if="{{task.runner_name}}"><text class="kv-k">接单者</text><text class="kv-v">{{task.runner_name}}</text></view>
+    <view class="contact-row" wx:if="{{task.phoneNumber || task.wechatId}}">
+      <view class="contact-btn" wx:if="{{task.phoneNumber}}" bindtap="callPublisher">打电话</view>
+      <view class="contact-btn" wx:if="{{task.wechatId}}" bindtap="copyWechat">复制微信号</view>
+    </view>
+    <view class="hint" wx:else>发布者没有留联系方式，先在站内确认一下再出发。</view>
+  </view>
+
+  <!-- 时间线 -->
+  <view class="card">
+    <view class="card-title">时间记录</view>
+    <view class="timeline-item">
+      <text class="tl-dot"></text>
+      <text class="tl-text">发布 {{task.createText}}</text>
+    </view>
+    <view class="timeline-item" wx:if="{{task.acceptText}}">
+      <text class="tl-dot"></text>
+      <text class="tl-text">接单 {{task.acceptText}}</text>
+    </view>
+    <view class="timeline-item" wx:if="{{task.completeText}}">
+      <text class="tl-dot done"></text>
+      <text class="tl-text">完成 {{task.completeText}}</text>
+    </view>
+    <view class="timeline-item" wx:if="{{task.cancelText}}">
+      <text class="tl-dot cancel"></text>
+      <text class="tl-text">取消 {{task.cancelText}}</text>
+    </view>
+  </view>
+
+  <!-- 底部操作 -->
+  <view class="action-bar">
+    <view class="btn btn-ghost" bindtap="goHome">回首页</view>
+
+    <view wx:if="{{task.status === 1 && role === 'publisher'}}" class="btn btn-danger" bindtap="cancel">取消任务</view>
+    <view wx:if="{{task.status === 1 && role !== 'publisher'}}" class="btn btn-primary" bindtap="accept">立即接单</view>
+
+    <view wx:if="{{task.status === 2 && role === 'runner'}}" class="btn btn-danger" bindtap="abandon">放弃任务</view>
+    <view wx:if="{{task.status === 2 && role === 'runner'}}" class="btn btn-primary" bindtap="complete">标记完成</view>
+
+    <view wx:if="{{task.status === 2 && role === 'publisher'}}" class="btn btn-primary" bindtap="confirmDone">确认完成</view>
+
+    <view wx:if="{{task.status >= 3}}" class="btn btn-ghost" bindtap="goHome">这单已结束</view>
+  </view>
+</view>
+
+<view class="empty" wx:elif="{{notFound}}">
+  <view>任务不存在或已被删除</view>
+  <view class="btn btn-ghost" style="margin: 32rpx auto 0; width: 280rpx;" bindtap="goHome">回首页</view>
+</view>

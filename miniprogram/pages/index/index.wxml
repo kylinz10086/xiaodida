@@ -1,0 +1,97 @@
+<view class="page">
+  <!-- 顶部品牌区 -->
+  <view class="hero">
+    <view class="hero-title">校递达</view>
+    <view class="hero-sub">校园快递 · 代取带餐 · 同校互助</view>
+    <view class="hero-school">
+      <text class="dot"></text>
+      <text>{{school}}</text>
+    </view>
+  </view>
+
+  <!-- 快捷发布 -->
+  <view class="quick-row">
+    <view class="quick-card" data-type="1" bindtap="goPublish">
+      <view class="quick-icon express">取</view>
+      <view class="quick-main">代取快递</view>
+      <view class="quick-sub">驿站/快递柜 → 宿舍</view>
+    </view>
+    <view class="quick-card" data-type="2" bindtap="goPublish">
+      <view class="quick-icon meal">带</view>
+      <view class="quick-main">代带餐食</view>
+      <view class="quick-sub">食堂 → 教室/自习</view>
+    </view>
+  </view>
+
+  <!-- 搜索 -->
+  <view class="search-wrap">
+    <view class="search-box">
+      <text class="search-icon">⌕</text>
+      <input
+        class="search-input"
+        value="{{keyword}}"
+        placeholder="搜索任务、地点"
+        placeholder-class="search-ph"
+        confirm-type="search"
+        bindinput="onKeywordInput"
+        bindconfirm="onSearch"
+      />
+      <view class="search-btn" bindtap="onSearch">搜索</view>
+    </view>
+  </view>
+
+  <!-- 筛选 -->
+  <view class="filter-row">
+    <view class="filter-tab {{filterType === 0 ? 'active' : ''}}" data-type="0" bindtap="changeFilter">全部</view>
+    <view class="filter-tab {{filterType === 1 ? 'active' : ''}}" data-type="1" bindtap="changeFilter">快递代取</view>
+    <view class="filter-tab {{filterType === 2 ? 'active' : ''}}" data-type="2" bindtap="changeFilter">代带餐食</view>
+    <view class="filter-tab {{filterType === 3 ? 'active' : ''}}" data-type="3" bindtap="changeFilter">其他</view>
+  </view>
+
+  <!-- 任务市场 -->
+  <view class="section-head">
+    <text class="section-title">任务市场</text>
+    <text class="section-count">{{tasks.length}} 单待接</text>
+  </view>
+
+  <view class="list">
+    <view class="card task" wx:for="{{tasks}}" wx:key="_id" data-id="{{item._id}}" bindtap="goDetail">
+      <view class="task-head">
+        <text class="tag {{item.tagClass}}">{{item.typeText}}</text>
+        <view class="task-price">
+          <text class="price-symbol">¥</text>
+          <text class="price-value">{{item.moneyText}}</text>
+        </view>
+      </view>
+
+      <view class="task-title">{{item.title}}</view>
+      <view class="task-desc" wx:if="{{item.description}}">{{item.description}}</view>
+
+      <view class="tags" wx:if="{{item.itemSize || item.timeOption}}">
+        <text class="mini-tag" wx:if="{{item.itemSize}}">{{item.itemSize}}</text>
+        <text class="mini-tag" wx:if="{{item.timeOption}}">{{item.timeOption}}</text>
+      </view>
+
+      <view class="route" wx:if="{{item.originName}}">
+        <view class="route-line">
+          <text class="point start">起</text>
+          <text class="point-text">{{item.originName}}</text>
+        </view>
+        <view class="route-line">
+          <text class="point end">终</text>
+          <text class="point-text">{{item.destinationName}}</text>
+        </view>
+      </view>
+
+      <view class="task-foot">
+        <text class="task-time">{{item.publisher_name}} · {{item.timeText}}</text>
+        <view class="btn btn-primary btn-sm" catchtap="quickAccept" data-id="{{item._id}}">接单</view>
+      </view>
+    </view>
+
+    <view class="empty" wx:if="{{tasks.length === 0}}">
+      <view>还没有待接的任务</view>
+      <view class="small" style="margin-top: 12rpx;">点上面「代取快递」发一个试试</view>
+    </view>
+  </view>
+</view>

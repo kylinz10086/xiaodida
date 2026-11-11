@@ -1,0 +1,71 @@
+<view class="page">
+  <!-- 用户卡 -->
+  <view class="profile">
+    <view class="avatar">{{user.avatarText}}</view>
+    <view class="profile-main">
+      <view class="profile-name" bindtap="editNickname">
+        {{user.nickname}}
+        <text class="edit">修改</text>
+      </view>
+      <view class="profile-school">{{school}}</view>
+    </view>
+  </view>
+
+  <!-- 统计 -->
+  <view class="stats">
+    <view class="stat" data-role="publisher" bindtap="goOrders">
+      <text class="stat-num">{{stats.published}}</text>
+      <text class="stat-label">我发布的</text>
+    </view>
+    <view class="stat" data-role="runner" bindtap="goOrders">
+      <text class="stat-num">{{stats.accepted}}</text>
+      <text class="stat-label">我接的单</text>
+    </view>
+    <view class="stat">
+      <text class="stat-num">¥{{stats.income}}</text>
+      <text class="stat-label">累计收入</text>
+    </view>
+  </view>
+
+  <!-- 菜单 -->
+  <view class="group">
+    <view class="cell" bindtap="editNickname">
+      <text class="cell-label">昵称</text>
+      <view class="row">
+        <text class="cell-value">{{user.nickname}}</text>
+        <text class="cell-arrow">›</text>
+      </view>
+    </view>
+    <view class="cell" bindtap="editMobile">
+      <text class="cell-label">手机号</text>
+      <view class="row">
+        <text class="cell-value">{{user.mobile || '未绑定'}}</text>
+        <text class="cell-arrow">›</text>
+      </view>
+    </view>
+    <view class="cell" data-role="all" bindtap="goOrders">
+      <text class="cell-label">我的订单</text>
+      <view class="row">
+        <text class="cell-value">全部</text>
+        <text class="cell-arrow">›</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="group">
+    <view class="cell" bindtap="goPublish">
+      <text class="cell-label">我要发需求</text>
+      <text class="cell-arrow">›</text>
+    </view>
+    <view class="cell" bindtap="about">
+      <text class="cell-label">关于校递达</text>
+      <text class="cell-arrow">›</text>
+    </view>
+    <view class="cell" bindtap="resetDemo">
+      <text class="cell-label danger">重置演示数据</text>
+      <text class="cell-arrow">›</text>
+    </view>
+  </view>
+
+  <view class="footer">本地演示版 · 数据仅存在本机</view>
+</view>

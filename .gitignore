@@ -1,0 +1,49 @@
+# 依赖
+node_modules/
+**/node_modules/
+.pnpm-store/
+
+# uni-app / HBuilderX 编译产物（由 HBuilderX 重新生成即可）
+unpackage/
+**/unpackage/
+
+# 微信开发者工具本地私有配置（含本地 appid/编译设置，不入库）
+project.private.config.json
+**/project.private.config.json
+
+# 日志与临时文件
+*.log
+logs/
+*.tmp
+*.bak
+
+# ⚠️ 敏感凭据：微信支付商户号 / API 密钥，禁止入库
+微信支付信息.txt
+支付信息.txt
+*.pem
+*.p12
+*.key
+.env
+.env.*
+.secrets/
+
+# ⚠️ uni-id 真实配置（appsecret / tokenSecret / pepper）
+# 仓库只保留同目录的 config.example.json；本文件留在本地供部署使用
+apps/user/uniCloud-aliyun/cloudfunctions/common/uni-config-center/uni-id/config.json
+
+# 本地覆盖配置
+*.local.json
+*.local.js
+
+# 腾讯地图 KEY（本地填，仓库只留 map-key.example.js）
+apps/user/common/map-key.js
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+*.swp
+
+# 微信支付真实配置（模板见 pay-config.example.js）
+apps/user/uniCloud-aliyun/cloudfunctions/xyyx-pay/pay-config.js

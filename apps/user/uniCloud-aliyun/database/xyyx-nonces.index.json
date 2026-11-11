@@ -1,0 +1,12 @@
+{
+  "indexes": [
+    {
+      "IndexName": "key_unique",
+      "MgoKeySchema": { "MgoIndexKeys": [{ "Name": "key", "Direction": "1" }], "MgoIsUnique": true }
+    },
+    {
+      "IndexName": "expire_time",
+      "MgoKeySchema": { "MgoIndexKeys": [{ "Name": "expire_time", "Direction": "1" }], "MgoIsUnique": false }
+    }
+  ]
+}
