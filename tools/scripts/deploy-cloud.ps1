@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     一键部署校递达后端到 uniCloud（阿里云）。
 

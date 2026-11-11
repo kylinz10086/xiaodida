@@ -94,15 +94,29 @@ xiaodida/
 
 仓库里**没有任何真实密钥**。部署前需要本地生成：
 
+**推荐用脚本**（自动生成随机 pepper/tokenSecret，避免手抄出错）：
+
 ```powershell
-# 1. 复制模板
+# 交互式，会提示你粘贴 AppSecret
+.\tools\scripts\setup-secrets.ps1
+
+# 或者一次给全
+.\tools\scripts\setup-secrets.ps1 -AppSecret "你的新AppSecret"
+```
+
+脚本会：读 `config.example.json` → 生成 3 个 32 字节随机串 → 写入 `config.json` → 跑一遍密钥扫描。
+
+**手工方式**：
+
+```powershell
 copy "apps\user\uniCloud-aliyun\cloudfunctions\common\uni-config-center\uni-id\config.example.json" `
      "apps\user\uniCloud-aliyun\cloudfunctions\common\uni-config-center\uni-id\config.json"
+# 然后把 <PASSWORD_PEPPER> / <TOKEN_SECRET> / <REQUEST_AUTH_SECRET> / <WX_APP_SECRET> 换成真实值
+```
 
-# 2. 把里面的 <PASSWORD_PEPPER> / <TOKEN_SECRET> / <REQUEST_AUTH_SECRET> / <WX_APP_SECRET> 换成真实值
-#    随机串可用：node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+**支付配置**（可选，不配就是模拟支付）：
 
-# 3. 支付（可选，不配就是模拟支付）
+```powershell
 copy "apps\user\uniCloud-aliyun\cloudfunctions\xyyx-pay\pay-config.example.js" `
      "apps\user\uniCloud-aliyun\cloudfunctions\xyyx-pay\pay-config.js"
 ```
