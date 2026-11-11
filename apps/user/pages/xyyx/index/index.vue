@@ -1,73 +1,87 @@
 <template>
-	<view class="page-container">
-		<u-dropdown class="area" :border-bottom="true">
-			<u-dropdown-item v-model="value1" :title="options1[value1].label" :options="options1"></u-dropdown-item>
-		</u-dropdown>
+	<view class="page">
+		<!-- 顶部品牌区 -->
+		<view class="hero">
+			<view class="hero-top">
+				<view>
+					<text class="hero-title">校递达</text>
+					<text class="hero-sub">校园快递 · 代取带餐 · 同校互助</text>
+				</view>
+				<view class="hero-badge" @click="goMine">
+					<text class="badge-dot"></text>
+					<text>{{ isLoggedIn ? '已登录' : '未登录' }}</text>
+				</view>
+			</view>
+			<view class="hero-school">
+				<text class="dot"></text>
+				<text>{{ school }}</text>
+			</view>
+		</view>
+
+		<!-- 快捷发布 -->
+		<view class="quick-row">
+			<view class="quick-card" @tap="clickReleaseRequirments(1)">
+				<view class="quick-icon express">取</view>
+				<view class="quick-main">代取快递</view>
+				<view class="quick-sub">驿站 / 快递柜 → 宿舍</view>
+			</view>
+			<view class="quick-card" @tap="clickReleaseRequirments(2)">
+				<view class="quick-icon meal">带</view>
+				<view class="quick-main">代带餐食</view>
+				<view class="quick-sub">食堂 → 教室 / 自习</view>
+			</view>
+		</view>
+
+		<!-- 搜索 -->
 		<view class="search-wrap" @click="goToSearch">
 			<view class="search-box">
-				<text class="search-placeholder">搜索任务、服务...</text>
+				<text class="search-icon">⌕</text>
+				<text class="search-placeholder">搜索任务、地点</text>
 			</view>
 		</view>
-		<view class="banner-wrap">
-			<u-swiper class="banner-swiper" mode="rect" img-mode="aspectFit" :list="list" height="320" border-radius="24"></u-swiper>
-		</view>
-		<view class="section-title">
-			<view class="title-text">发布需求</view>
-			<view class="title-line"></view>
-		</view>
-		<u-row gutter="16" class="action-row">
-			<u-col span="6">
-				<view class="action-card" @tap="clickReleaseRequirments(1)">
-					<image class="action-icon" :src="imgCheckAllSrc" mode="aspectFit"></image>
-					<view class="action-main">代取快递</view>
-					<view class="action-sub">package requirement</view>
-				</view>
-			</u-col>
-			<u-col span="6">
-				<view class="action-card" @tap="clickReleaseRequirments(2)">
-					<image class="action-icon" :src="imgShareSrc" mode="aspectFit"></image>
-					<view class="action-main">我要带餐</view>
-					<view class="action-sub">takeaway requirement</view>
-				</view>
-			</u-col>
-		</u-row>
-		<view class="section-header">
-			<view class="section-title">
-				<view class="title-text">任务市场</view>
-				<image class="refresh-icon" :src="imgRefreshSrc" mode="aspectFit" @click="refreshList"></image>
-			</view>
+
+		<!-- 任务市场 -->
+		<view class="section-head">
+			<text class="section-title">任务市场</text>
 			<view class="sort-tabs">
-				<view 
-					class="sort-tab" 
-					:class="{'active': sortType === 'time'}" 
-					@click="changeSortType('time')">
+				<view class="sort-tab" :class="{ active: sortType === 'time' }" @click="changeSortType('time')">
 					<text>按时间</text>
-					<view class="sort-arrow" v-if="sortType === 'time'">
-						<text :class="['arrow', {'up': sortOrder === 'asc', 'down': sortOrder === 'desc'}]">↓</text>
-					</view>
 				</view>
-				<view 
-					class="sort-tab" 
-					:class="{'active': sortType === 'price'}" 
-					@click="changeSortType('price')">
+				<view class="sort-tab" :class="{ active: sortType === 'price' }" @click="changeSortType('price')">
 					<text>按价格</text>
-					<view class="sort-arrow" v-if="sortType === 'price'">
-						<text :class="['arrow', {'up': sortOrder === 'asc', 'down': sortOrder === 'desc'}]">↓</text>
-					</view>
 				</view>
 			</view>
 		</view>
-		<view class="mission-list">
-			<view class="empty-tip" v-if="orderList.length === 0 && !loading">
-				<text>暂无任务，快去发布需求吧~</text>
+
+		<view class="list">
+			<view v-if="loading" class="empty-tip"><text>加载中...</text></view>
+
+			<block v-else-if="orderList.length">
+				<mission-list-item :listData="orderList"></mission-list-item>
+			</block>
+
+			<view v-else class="empty-card">
+				<view class="empty-icon">📦</view>
+				<text class="empty-title">暂时还没有待接的任务</text>
+				<text class="empty-sub">发一个试试，同校同学会来帮你</text>
+				<view class="empty-btn" @tap="clickReleaseRequirments(1)">发布需求</view>
 			</view>
-			<view class="loading-tip" v-else-if="loading">
-				<text>加载中...</text>
-			</view>
-		    <mission-list-item v-else :listData="orderList"></mission-list-item>
 		</view>
-		<wechat-login-modal 
-			:visible="showLoginModal" 
+
+		<!-- 骑手入口 -->
+		<view class="rider-entry" @click="goRider">
+			<view class="rider-left">
+				<text class="rider-icon">🛵</text>
+				<view>
+					<text class="rider-title">我是骑手</text>
+					<text class="rider-sub">接单赚零花钱</text>
+				</view>
+			</view>
+			<text class="rider-arrow">›</text>
+		</view>
+
+		<wechat-login-modal
+			:visible="showLoginModal"
 			@close="showLoginModal = false"
 			@skip="showLoginModal = false"
 			@success="onLoginSuccess">
@@ -76,157 +90,126 @@
 </template>
 
 <script>
-	import { mapGetters, mapActions } from 'vuex';
-	import imgLogo1 from '../../../static/icon/logo1.png'
-	import imgRefresh from '../../../static/icon/refresh.png'
-	import imgCheckAll from '../../../static/icon/checkall.png'
-	import imgShare from '../../../static/icon/share.png'
-
+	import { mapGetters, mapActions } from 'vuex'
 	import MissionListItem from '../components/mission-list-item.vue'
 	import WechatLoginModal from '@/components/wechat-login-modal/wechat-login-modal.vue'
 
 	export default {
-		components: {
-			MissionListItem,
-			WechatLoginModal
-		},
+		components: { MissionListItem, WechatLoginModal },
 		computed: {
-			...mapGetters(['getTaskList']),
+			...mapGetters(['getTaskList', 'school']),
+			isLoggedIn() {
+				return !!(uni.getStorageSync('uniIdToken') || uni.getStorageSync('token'))
+			},
 			orderList() {
-				let list = this.getTaskList.map(task => ({
+				let list = (this.getTaskList || []).map((task) => ({
 					id: task._id || task.id,
-					imgSrc: task.imgSrc || '/static/icon/order.png',
-					thing: task.thing || task.title || task.description,
+					thing: task.title || task.thing,
 					title: task.title,
 					description: task.description,
-					money: task.money,
-					time: this.formatTime(task.create_time || task.time || task.createTime),
+					money: task.amount !== undefined ? task.amount : task.money,
+					time: task.timeText || '',
 					type: task.type,
 					typeText: task.typeText,
-					deadline: task.deadline,
-					timeOption: task.timeOption,
 					origin: task.origin,
 					destination: task.destination,
 					itemSize: task.itemSize,
+					timeOption: task.timeOption,
 					status: task.status,
-					createTime: task.create_time || task.createTime
-				}));
-				
+					createTime: task.create_time
+				}))
+
 				if (this.sortType === 'time') {
-					list.sort((a, b) => {
-						const timeA = a.createTime || 0;
-						const timeB = b.createTime || 0;
-						return this.sortOrder === 'desc' ? timeB - timeA : timeA - timeB;
-					});
+					list.sort((a, b) => (this.sortOrder === 'desc'
+						? (b.createTime || 0) - (a.createTime || 0)
+						: (a.createTime || 0) - (b.createTime || 0)))
 				} else if (this.sortType === 'price') {
-					list.sort((a, b) => {
-						return this.sortOrder === 'desc' ? b.money - a.money : a.money - b.money;
-					});
+					list.sort((a, b) => (this.sortOrder === 'desc' ? b.money - a.money : a.money - b.money))
 				}
-				
-				return list;
+				return list
 			}
 		},
 		onShow() {
-			this.checkAgreement();
-			this.checkLoginStatus();
-			this.loadTaskList();
+			this.checkAgreement()
+			this.loadTaskList()
 		},
-		methods:{
-			...mapActions(['acceptTask', 'fetchTaskList', 'acceptAgreement']),
-			/**
-			 * 合规：首次进入必须先同意《用户服务协议》和《隐私政策》。
-			 * 同意后写本地标记，同时由云对象 xyyx-user.acceptAgreement 留痕（带版本号）。
-			 */
+		onPullDownRefresh() {
+			this.loadTaskList().finally(() => uni.stopPullDownRefresh())
+		},
+		methods: {
+			...mapActions(['fetchTaskList', 'acceptAgreement']),
+
 			checkAgreement() {
-				const agreed = uni.getStorageSync('agreed_version');
-				if (agreed === '1.0.0') return;
+				if (uni.getStorageSync('agreed_version') === '1.0.0') return
 				uni.showModal({
 					title: '用户协议与隐私政策',
-					content: '为了向你提供校园跑腿服务，我们需要你同意《用户服务协议》和《隐私政策》。\n\n我们只收集手机号、位置、订单信息等必要信息，且不会向无关第三方提供。',
+					content: '为了向你提供校园跑腿服务，需要你同意《用户服务协议》和《隐私政策》。我们只收集手机号、位置、订单等必要信息。',
 					confirmText: '同意并继续',
 					cancelText: '查看协议',
 					confirmColor: '#007AFF',
 					success: (res) => {
 						if (res.confirm) {
-							uni.setStorageSync('agreed_version', '1.0.0');
-							this.acceptAgreement().catch(() => {});
+							uni.setStorageSync('agreed_version', '1.0.0')
+							this.acceptAgreement().catch(() => {})
 						} else {
-							uni.navigateTo({ url: '/pages/xyyx/agreement/user-agreement' });
+							uni.navigateTo({ url: '/pages/xyyx/agreement/user-agreement' })
 						}
 					}
-				});
+				})
 			},
-			formatTime(timestamp) {
-				if (!timestamp) return '';
-				const date = new Date(timestamp);
-				const year = date.getFullYear();
-				const month = String(date.getMonth() + 1).padStart(2, '0');
-				const day = String(date.getDate()).padStart(2, '0');
-				const hour = String(date.getHours()).padStart(2, '0');
-				const minute = String(date.getMinutes()).padStart(2, '0');
-				return `${year}-${month}-${day} ${hour}:${minute}`;
-			},
+
 			async loadTaskList() {
-				this.loading = true;
+				this.loading = true
 				try {
-					await this.fetchTaskList({ status: 1, page: 1, pageSize: 50 });
+					await this.fetchTaskList({ status: 1, page: 1, pageSize: 50 })
 				} catch (e) {
-					console.error('加载任务列表失败', e);
+					// 未登录时大厅也能看，失败就安静地显示空态
 				} finally {
-					this.loading = false;
+					this.loading = false
 				}
 			},
-			checkLoginStatus() {
-				const token = uni.getStorageSync('uniIdToken') || uni.getStorageSync('token');
-				if (!token) {
-					this.showLoginModal = true;
+
+			clickReleaseRequirments(num) {
+				if (!this.isLoggedIn) {
+					this.showLoginModal = true
+					this.pendingAction = { type: 'release', num }
+					return
 				}
+				uni.navigateTo({
+					url: '/pages/xyyx/release-requirements/release-requirements?item=' + num + '&type=release'
+				})
 			},
-			onLoginSuccess(result) {
-				this.showLoginModal = false;
-				this.loadTaskList();
+
+			onLoginSuccess() {
+				this.showLoginModal = false
+				this.loadTaskList()
 				if (this.pendingAction && this.pendingAction.type === 'release') {
-					const num = this.pendingAction.num;
-					this.pendingAction = null;
+					const num = this.pendingAction.num
+					this.pendingAction = null
 					setTimeout(() => {
 						uni.navigateTo({
 							url: '/pages/xyyx/release-requirements/release-requirements?item=' + num + '&type=release'
-						});
-					}, 300);
+						})
+					}, 300)
 				}
 			},
-			clickReleaseRequirments: function(num) {
-				const token = uni.getStorageSync('uniIdToken') || uni.getStorageSync('token');
-				if (!token) {
-					this.showLoginModal = true;
-					this.pendingAction = { type: 'release', num: num };
-					return;
-				}
-				uni.navigateTo({
-					url: '/pages/xyyx/release-requirements/release-requirements?item='+ num+ '&type=release'
-				});
-			},
+
 			goToSearch() {
-				uni.navigateTo({
-					url: '/pages/xyyx/search/search'
-				});
+				uni.navigateTo({ url: '/pages/xyyx/search/search' })
+			},
+			goMine() {
+				uni.switchTab({ url: '/pages/xyyx/userinfo/userinfo' })
+			},
+			goRider() {
+				uni.navigateTo({ url: '/pages/rider/center' })
 			},
 			changeSortType(type) {
 				if (this.sortType === type) {
-					this.sortOrder = this.sortOrder === 'desc' ? 'asc' : 'desc';
+					this.sortOrder = this.sortOrder === 'desc' ? 'asc' : 'desc'
 				} else {
-					this.sortType = type;
-					this.sortOrder = 'desc';
+					this.sortType = type
+					this.sortOrder = 'desc'
 				}
-			},
-			async refreshList() {
-				await this.loadTaskList();
-				uni.showToast({
-					title: '刷新成功',
-					icon: 'success',
-					duration: 1000
-				});
 			}
 		},
 		data() {
@@ -235,185 +218,270 @@
 				pendingAction: null,
 				sortType: 'time',
 				sortOrder: 'desc',
-				loading: false,
-				list: [{
-					image: imgLogo1,
-					title: '校递达'
-				}],
-				imgRefreshSrc: imgRefresh,
-				imgCheckAllSrc: imgCheckAll,
-				imgShareSrc: imgShare,
-				value1: 0,
-				options1: [
-					{
-						label: '浙江中医药大学',
-						value: 0,
-					}
-				],
-			};
+				loading: false
+			}
 		}
 	}
 </script>
 
 <style lang="scss">
-	.page-container {
+	.page {
 		background-color: #F2F2F7;
 		min-height: 100vh;
+		padding-bottom: 40rpx;
 	}
-	
-	.area>view>view>.u-dropdown__menu__item {
-		background-color: #fff;
+
+	/* 顶部品牌 */
+	.hero {
+		background: linear-gradient(160deg, #007AFF 0%, #3AA0FF 100%);
+		padding: 44rpx 36rpx 64rpx;
+		color: #fff;
 	}
-	
+
+	.hero-top {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+	}
+
+	.hero-title {
+		display: block;
+		font-size: 48rpx;
+		font-weight: 800;
+		letter-spacing: 2rpx;
+	}
+
+	.hero-sub {
+		display: block;
+		margin-top: 10rpx;
+		font-size: 26rpx;
+		opacity: 0.9;
+	}
+
+	.hero-badge {
+		display: flex;
+		align-items: center;
+		padding: 8rpx 18rpx;
+		border-radius: 30rpx;
+		background: rgba(255, 255, 255, 0.2);
+		font-size: 22rpx;
+	}
+
+	.badge-dot {
+		width: 10rpx;
+		height: 10rpx;
+		border-radius: 50%;
+		background: #7DFFB0;
+		margin-right: 10rpx;
+	}
+
+	.hero-school {
+		display: inline-flex;
+		align-items: center;
+		margin-top: 24rpx;
+		padding: 8rpx 20rpx;
+		border-radius: 30rpx;
+		background: rgba(255, 255, 255, 0.18);
+		font-size: 24rpx;
+	}
+
+	.dot {
+		width: 10rpx;
+		height: 10rpx;
+		border-radius: 50%;
+		background: #FFD60A;
+		margin-right: 10rpx;
+	}
+
+	/* 快捷发布 */
+	.quick-row {
+		display: flex;
+		gap: 20rpx;
+		padding: 0 24rpx;
+		margin-top: -36rpx;
+	}
+
+	.quick-card {
+		flex: 1;
+		background: #fff;
+		border-radius: 24rpx;
+		padding: 26rpx 24rpx;
+		box-shadow: 0 8rpx 24rpx rgba(0, 0, 0, 0.08);
+
+		&:active {
+			transform: scale(0.97);
+		}
+	}
+
+	.quick-icon {
+		width: 64rpx;
+		height: 64rpx;
+		border-radius: 18rpx;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 30rpx;
+		font-weight: 700;
+		color: #fff;
+		margin-bottom: 14rpx;
+
+		&.express { background: #007AFF; }
+		&.meal { background: #FF9500; }
+	}
+
+	.quick-main {
+		font-size: 30rpx;
+		font-weight: 700;
+		color: #1C1C1E;
+	}
+
+	.quick-sub {
+		margin-top: 6rpx;
+		font-size: 22rpx;
+		color: #8E8E93;
+	}
+
+	/* 搜索 */
 	.search-wrap {
-		background-color: #fff;
-		padding: 16rpx 32rpx;
+		padding: 24rpx 24rpx 0;
 	}
-	
+
 	.search-box {
 		display: flex;
 		align-items: center;
-		height: 70rpx;
-		background-color: #f5f7fa;
-		border-radius: 35rpx;
-		padding: 0 24rpx;
+		height: 76rpx;
+		background: #fff;
+		border-radius: 38rpx;
+		padding: 0 26rpx;
 	}
-	
+
+	.search-icon {
+		font-size: 32rpx;
+		color: #8E8E93;
+		margin-right: 12rpx;
+	}
+
 	.search-placeholder {
 		font-size: 28rpx;
-		color: #999;
+		color: #B0B0B5;
 	}
-	
-	.banner-wrap {
-		padding: 24rpx 32rpx;
-		background-color: #fff;
-	}
-	
-	.banner-swiper {
-		border-radius: 24rpx;
-		overflow: hidden;
-		background-color: #F2F2F7;
-	}
-	
-	.section-title {
+
+	/* 任务市场 */
+	.section-head {
 		display: flex;
 		align-items: center;
-		padding: 24rpx 32rpx 16rpx;
-		
-		.title-text {
-			font-size: 34rpx;
-			font-weight: 700;
-			color: #000;
-		}
-		
-		.title-line {
-			flex: 1;
-			height: 0;
-		}
-	}
-	
-	.action-row {
-		padding: 0 24rpx;
-	}
-	
-	.action-card {
-		background: #fff;
-		border-radius: 20rpx;
-		padding: 32rpx;
-		margin: 8rpx;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		transition: transform 0.2s ease;
-		
-		&:active {
-			transform: scale(0.96);
-		}
-		
-		.action-icon {
-			width: 72rpx;
-			height: 72rpx;
-			margin-bottom: 12rpx;
-		}
-		
-		.action-main {
-			font-size: 30rpx;
-			font-weight: 600;
-			color: #000;
-			margin-bottom: 4rpx;
-		}
-		
-		.action-sub {
-			font-size: 22rpx;
-			color: #8E8E93;
-		}
-	}
-	
-	.section-header {
-		display: flex;
 		justify-content: space-between;
-		align-items: center;
-		padding: 16rpx 32rpx;
-		background-color: #F2F2F7;
-		
-		.section-title {
-			padding: 0;
-			display: flex;
-			align-items: center;
-			
-			.refresh-icon {
-				width: 36rpx;
-				height: 36rpx;
-				margin-left: 16rpx;
-			}
-		}
+		padding: 32rpx 32rpx 16rpx;
 	}
-	
+
+	.section-title {
+		font-size: 34rpx;
+		font-weight: 700;
+		color: #1C1C1E;
+	}
+
 	.sort-tabs {
 		display: flex;
 		gap: 12rpx;
 	}
-	
+
 	.sort-tab {
-		display: flex;
-		align-items: center;
-		padding: 12rpx 20rpx;
-		background-color: rgba(0, 122, 255, 0.1);
+		padding: 10rpx 22rpx;
 		border-radius: 16rpx;
-		font-size: 26rpx;
+		font-size: 24rpx;
 		color: #007AFF;
-		font-weight: 500;
-		transition: all 0.2s;
-		
+		background: rgba(0, 122, 255, 0.1);
+
 		&.active {
-			background-color: #007AFF;
+			background: #007AFF;
 			color: #fff;
 		}
 	}
-	
-	.sort-arrow {
-		margin-left: 6rpx;
-		display: flex;
-		align-items: center;
-		
-		.arrow {
-			font-size: 22rpx;
-			transition: transform 0.2s;
-			
-			&.up {
-				transform: rotate(180deg);
-			}
-		}
+
+	.list {
+		padding: 0 24rpx;
 	}
-	
-	.mission-list {
-		padding: 0 32rpx 32rpx;
-	}
-	
-	.empty-tip, .loading-tip {
+
+	.empty-tip {
 		text-align: center;
 		padding: 100rpx 0;
 		color: #8E8E93;
 		font-size: 28rpx;
+	}
+
+	.empty-card {
+		background: #fff;
+		border-radius: 24rpx;
+		padding: 56rpx 32rpx;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+	}
+
+	.empty-icon {
+		font-size: 72rpx;
+		margin-bottom: 16rpx;
+	}
+
+	.empty-title {
+		font-size: 30rpx;
+		font-weight: 600;
+		color: #1C1C1E;
+	}
+
+	.empty-sub {
+		margin-top: 10rpx;
+		font-size: 24rpx;
+		color: #8E8E93;
+	}
+
+	.empty-btn {
+		margin-top: 28rpx;
+		padding: 16rpx 56rpx;
+		border-radius: 40rpx;
+		background: #007AFF;
+		color: #fff;
+		font-size: 28rpx;
+		font-weight: 600;
+	}
+
+	/* 骑手入口 */
+	.rider-entry {
+		margin: 24rpx;
+		background: #fff;
+		border-radius: 24rpx;
+		padding: 28rpx;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+	}
+
+	.rider-left {
+		display: flex;
+		align-items: center;
+	}
+
+	.rider-icon {
+		font-size: 44rpx;
+		margin-right: 20rpx;
+	}
+
+	.rider-title {
+		display: block;
+		font-size: 30rpx;
+		font-weight: 600;
+		color: #1C1C1E;
+	}
+
+	.rider-sub {
+		display: block;
+		margin-top: 6rpx;
+		font-size: 22rpx;
+		color: #8E8E93;
+	}
+
+	.rider-arrow {
+		font-size: 36rpx;
+		color: #C7C7CC;
 	}
 </style>

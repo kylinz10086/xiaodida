@@ -13,12 +13,11 @@
 	"pages": [
 		{
 		    "path" : "pages/xyyx/index/index",
-		    "style" :                                                                                    
-		    {
+		    "style" : {
 		        "navigationBarTitleText": "校递达",
-		        "enablePullDownRefresh": false
+		        "enablePullDownRefresh": true,
+		        "backgroundTextStyle": "dark"
 		    }
-		    
 		},
 		{
 		    "path" : "pages/xyyx/order/order",
