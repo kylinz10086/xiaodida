@@ -53,7 +53,7 @@ DSH 里原有插件只有 B 站 / QQ / 搜索类，没有小程序开发能力�
 | `HBX_CLI` | `F:\HBuilderX.5.05.2026032417\HBuilderX\cli.exe` |
 | `WX_REPO` | `F:\xiaodida` |
 | `WX_PROJECT` | `<WX_REPO>\miniprogram` |
-| `WX_UNI_DIST` | `<WX_REPO>\校递达app客户端\unpackage\dist\dev\mp-weixin` |
+| `WX_UNI_DIST` | `<WX_REPO>\apps\user\unpackage\dist\build\mp-weixin`（自动兼容 `dist\dev`） |
 
 换机器记得改这几个变量，或者改文件顶部常量。
 

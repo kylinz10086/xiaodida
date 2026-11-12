@@ -1,4 +1,4 @@
-﻿<template>
+<template>
 <view class="search-page">
 <view class="search-header">
 <view class="search-input-wrap">
@@ -86,7 +86,7 @@ v-for="(item, index) in suggestions"
 <view 
 class="result-item" 
 v-for="(item, index) in results" 
-:key="item.id || index"
+:key="item.id"
 @click="goToDetail(item)">
 <image class="item-img" :src="item.imgSrc || '/static/icon/order.png'" mode="aspectFill"></image>
 <view class="item-content">

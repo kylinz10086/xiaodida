@@ -1,0 +1,39 @@
+{
+  "bsonType": "object",
+  "required": ["task_id", "user_id", "amount_cent", "status"],
+  "permission": { "read": false, "create": false, "update": false, "delete": false },
+  "description": "退款单。每一次退钱都有一条独立记录；微信退款是异步的，靠 status 追踪 processing → success / failed，失败可重试。客户端只能通过云对象读写，直接读库一律拒绝。",
+  "properties": {
+    "_id": { "description": "退款单ID" },
+    "task_id": { "bsonType": "string", "description": "关联订单" },
+    "user_id": { "bsonType": "string", "description": "收钱的用户（订单发布者）" },
+    "out_refund_no": { "bsonType": "string", "description": "退款单号，作为微信 out_refund_no 的前缀，保证重试幂等" },
+    "amount_cent": { "bsonType": "int", "minimum": 1, "description": "本次退款金额（分）" },
+    "reason": { "bsonType": "string", "maxLength": 80, "description": "退款原因（会给用户看）" },
+    "source": {
+      "bsonType": "string",
+      "enum": ["cancel", "edit_down", "edit", "admin", "dispute", "repair"],
+      "description": "退款来源：取消订单 / 修改订单降价 / 管理员 / 售后"
+    },
+    "mode": {
+      "bsonType": "string",
+      "enum": ["wechat", "balance"],
+      "description": "wechat=原路退回微信；balance=退回账户余额（未开通商户支付时）"
+    },
+    "status": {
+      "bsonType": "string",
+      "enum": ["processing", "success", "failed"],
+      "description": "退款进度"
+    },
+    "parts": {
+      "bsonType": "array",
+      "description": "退款按原支付单逐笔发起，每笔一条：{ no, cent, index, status, wx_refund_id }"
+    },
+    "wx_refund_id": { "bsonType": "string", "description": "微信侧退款单号" },
+    "fail_reason": { "bsonType": "string", "maxLength": 200 },
+    "operator": { "bsonType": "string", "description": "操作人（用户ID或 system）" },
+    "create_time": { "bsonType": "timestamp" },
+    "update_time": { "bsonType": "timestamp" },
+    "finish_time": { "bsonType": "timestamp" }
+  }
+}

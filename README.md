@@ -1,13 +1,38 @@
 # 校递达 · 校园跑腿小程序
 
 浙江中医药大学的校园快递代取 / 代带餐食互助平台。
-**一个小程序，进去选身份**（用户 / 骑手）+ **uniCloud 后端（支付宝云）**，资金走「预付托管」模式。
-
-> 想直接体验：看 [docs/try-it.md](docs/try-it.md)
+**一个小程序，进去选身份**（用户 / 骑手）+ **uniCloud 后端（支付宝云）**，资金走「预付托管」。
 
 ```
-用户下单付款 ──▶ 平台托管 ──▶ 骑手接单 ──▶ 送达 ──▶ 用户确认 ──▶ 结算（平台抽佣 10%）
+用户下单付款 ──▶ 平台托管 ──▶ 骑手接单 ──▶ 送达 ──▶ 结算（平台服务费 5%）
 ```
+
+> 体验入口与账号见 [测试目录.md](测试目录.md)；部署见 [docs/usage.md](docs/usage.md)。
+
+---
+
+## 2026-11-12 晚 改了什么
+
+- **订单内聊天**：用户和骑手在订单里直接聊（文字 + 图片），4 秒增量轮询，未读红点、会话列表，
+  入口在订单详情 / 骑手任务详情 / 我的-消息 / 骑手中心-消息。
+- **订单详情页重做**：状态时间线（已支付 → 已接单 → 已取件 → 已送达 → 已完成）、骑手卡片、
+  真实数据走 `getTaskDetail`（不再依赖本地缓存），底部按钮按身份和状态只给能用的。
+- **协议与规则重写**：用户协议、隐私政策、跑腿服务协议、**骑手准则（新增）**、平台规则摘要、
+  算法公示。去掉模板腔，写清楚 5% 服务费、退款、24 小时确认、禁运品、处罚与申诉。
+- **合规入口补齐**：意见反馈、注销账号（写 `xyyx-feedback`，15 个工作日内处理）、
+  隐私政策里补充聊天记录与图片的收集说明。
+- **界面打磨**：骑手工作台、我的、订单、骑手中心、钱包、申请页统一视觉；金额统一两位小数；
+  空态、骨架屏、底部安全区、缺失图标全部修掉。
+- **修掉的真问题**：
+  - 云端部署的 `xyyx-common` 是旧版（抽佣 8%），与仓库 5% 不一致 → 重新部署，全端回到 5%；
+  - 任务图片上传走的是外部七牛 + 别人的 `upToken` 服务 → 换成 `uniCloud.uploadFile`；
+  - 头像保存的是本地临时路径（别人看不到）→ 改为上传云存储存 `fileID`；
+  - 发布页「代购」会存成 `type=4` 被服务端拒绝 → 收敛为 3 类，和骑手端筛选一致；
+  - 骑手详情只显示脱敏手机号（拨号却用完整号）→ 接单后正常显示完整号；
+  - 登录失败弹窗把 errMsg / 探测日志甩给用户 → 改成看得懂的提示，细节进控制台；
+  - 删除老模板遗留的 amap 导航页、七牛上传、i18n、`api.youzixy.com` 请求层等无用依赖。
+- **仓库整理**：删除归档的 `apps/rider`、历史演示版 `miniprogram/`、一次性调试脚本、
+  Chrome 调试 profile、过期截图；`unpackage/`、`node_modules/` 等仍在 `.gitignore`。
 
 ---
 
@@ -15,73 +40,66 @@
 
 ```
 xiaodida/
-├── rule.md                 ← 项目全局规则（务必先读）
+├── rule.md                 ← 项目红线（先读）
 ├── README.md
-├── docs/                   ← 使用文档、安全说明、数据模型、资金口径
-├── apps/
-│   ├── user/               ← 小程序主工程（用户 + 骑手两种身份）
-│   │   ├── pages/xyyx/     首页 / 发布 / 详情 / 订单 / 我的 / 协议
-│   │   ├── store/          Vuex，只调云对象 xyyx-user
-│   │   └── uniCloud-aliyun/  ★ 后端唯一源码
-│   │       ├── cloudfunctions/
-│   │       │   ├── common/xyyx-common/   鉴权·字段裁剪·记账
-│   │       │   ├── xyyx-user/            用户端云对象
-│   │       │   ├── xyyx-rider/           骑手端云对象
-│   │       │   └── xyyx-pay/             微信支付 V3 / mock
-│   │       └── database/                 8 张表 schema + 索引
-│   └── rider/              ← 原独立骑手端（已合并进 apps/user/pages/rider，仅存档）
-├── admin/                  ← 后台管理（uni-admin 模板，业务页待做）
-├── reference/              ← uni-id 登录模板（参考，不部署）
+├── 测试目录.md              ← 验收清单（明天按这个测）
+├── docs/                   ← 使用、接口、数据、资金、安全、竞品对标
+├── apps/user/              ← 唯一的小程序工程（用户 + 骑手两种身份）
+│   ├── pages/xyyx/         ← 首页 / 发布 / 详情 / 订单 / 我的 / 协议 / 反馈
+│   ├── pages/rider/        ← 骑手工作台 / 中心 / 申请 / 详情 / 收入
+│   ├── pages/chat/         ← 订单聊天（会话列表 + 聊天窗）
+│   ├── store/              ← Vuex，只调云对象 xyyx-user / xyyx-rider
+│   └── uniCloud-alipay/    ← ★ 后端唯一源码
+│       ├── cloudfunctions/
+│       │   ├── common/xyyx-common/   鉴权·字段裁剪·记账·聊天
+│       │   ├── xyyx-user/            用户端云对象
+│       │   ├── xyyx-rider/           骑手端云对象
+│       │   ├── xyyx-pay/             微信支付 V3 / mock
+│       │   ├── xyyx-admin/           管理后台云对象
+│       │   └── xyyx-cron/            定时任务（自动确认 + 清理 nonce）
+│       └── database/                 10 张表 schema + 索引
+├── admin/                  ← 后台管理（用户数据 / 骑手审核 / 系统设置）
+├── tests/                  ← 回归测试（金额流、骑手流、Vue 语法）
 ├── tools/
 │   ├── wx-mcp/             ← 自研微信小程序开发插件（MCP）
-│   └── scripts/            ← 密钥扫描 / 模板清洗 / 地图 key 抽取
-└── miniprogram/            ← 原生小程序离线演示版（历史产物）
+│   └── scripts/            ← 密钥扫描 / 部署 / 测试 / 图片压缩
+└── reference/              ← uni-id 登录模板（参考，不部署）
 ```
 
 ---
 
 ## 快速开始
 
-### 只想看效果（不需要云端）
-
-```powershell
-& "F:\微信web开发者工具\cli.bat" open --project "F:\xiaodida\miniprogram"
-```
-
-原生演示版，5 个页面、3 条示例任务、数据存本地，能完整走完下单 → 抢单 → 送达 → 确认。
-
-### 跑正经的两个端
-
 需要：HBuilderX（已登录 DCloud 账号）+ 微信开发者工具（已扫码登录）+ 已绑定的 uniCloud 空间。
 
 ```powershell
 # 1. 配密钥（仓库里没有真实密钥）
-copy "apps\user\uniCloud-aliyun\cloudfunctions\common\uni-config-center\uni-id\config.example.json" `
-     "apps\user\uniCloud-aliyun\cloudfunctions\common\uni-config-center\uni-id\config.json"
+copy "apps\user\uniCloud-alipay\cloudfunctions\common\uni-config-center\uni-id\config.example.json" `
+     "apps\user\uniCloud-alipay\cloudfunctions\common\uni-config-center\uni-id\config.json"
 # 然后把里面的占位符换成真实值
 
 # 2. 打开工程
 & "F:\HBuilderX.5.05.2026032417\HBuilderX\cli.exe" project open --path "F:\xiaodida\apps\user"
-& "F:\HBuilderX.5.05.2026032417\HBuilderX\cli.exe" project open --path "F:\xiaodida\apps\rider"
 
 # 3. 编译到微信小程序
-& "F:\HBuilderX.5.05.2026032417\HBuilderX\cli.exe" launch mp-weixin --project "F:\xiaodida\apps\user"  --compile true
-& "F:\HBuilderX.5.05.2026032417\HBuilderX\cli.exe" launch mp-weixin --project "F:\xiaodida\apps\rider" --compile true
+& "F:\HBuilderX.5.05.2026032417\HBuilderX\cli.exe" launch mp-weixin --project "F:\xiaodida\apps\user" --compile true
+# 产物：apps/user/unpackage/dist/dev/mp-weixin，用开发者工具打开这个目录
 ```
 
 云端部署（数据库、云对象、支付）详见 **[docs/usage.md](docs/usage.md)**。
 
 ---
 
-## 两个端是怎么隔离的
+## 一个 App，两种身份怎么隔离
 
 | 层 | 做法 |
 | --- | --- |
 | 接口 | 用户端只能调 `xyyx-user`，骑手端只能调 `xyyx-rider`，方法集不重叠 |
 | 字段 | 服务端 `taskForUser()` / `taskForRider()` 两套白名单 |
 | 数据 | 所有集合 `permission: false`，客户端无法直连数据库 |
+| 聊天 | 只有该订单的发布者和骑手是成员，服务端 `assertChatMember` 兜底 |
 
-**骑手接单前拿不到任何手机号**；接单后只给 `138****5678`。
+**骑手接单前拿不到任何手机号**；接单后能看到完整号码（要打电话），
 用户永远拿不到骑手的真名、学号、学校。
 
 ---
@@ -91,6 +109,7 @@ copy "apps\user\uniCloud-aliyun\cloudfunctions\common\uni-config-center\uni-id\c
 - 密码 `scrypt` + 每用户随机盐 + pepper（不用明文、不用裸哈希）
 - 写接口带 nonce 防重放，按 uid 限流，参数白名单
 - 记账有 `idempotency_key` 唯一索引，重复回调不重复入账
+- 聊天消息纯文本入库，仅订单双方可读，限流 30 条/分钟
 - 仓库零密钥：提交前跑 `node tools/scripts/check-secrets.mjs`
 
 详见 **[docs/security.md](docs/security.md)**。
@@ -102,22 +121,25 @@ copy "apps\user\uniCloud-aliyun\cloudfunctions\common\uni-config-center\uni-id\c
 | 文档 | 内容 |
 | --- | --- |
 | [rule.md](rule.md) | 项目全局规则与红线 |
+| [测试目录.md](测试目录.md) | 全功能验收清单 |
 | [docs/usage.md](docs/usage.md) | 怎么跑、怎么部署、怎么配支付 |
-| [docs/api.md](docs/api.md) | 云对象接口清单 |
-| [docs/data-model.md](docs/data-model.md) | 集合与字段 |
+| [docs/api.md](docs/api.md) | 云对象接口（含聊天） |
+| [docs/data-model.md](docs/data-model.md) | 集合与字段（含 `xyyx-messages`） |
 | [docs/finance.md](docs/finance.md) | 资金流转与对账口径 |
 | [docs/security.md](docs/security.md) | 安全措施与泄露处置 |
+| [docs/dev-guide.md](docs/dev-guide.md) | 开发约定、验证标准、踩坑记录 |
+| [docs/01-竞品对标与差距清单.md](docs/01-竞品对标与差距清单.md) | 和同类产品的差距与优先级 |
 
 ---
 
 ## 开发工具链
 
 本机已装微信开发者工具与 HBuilderX。仓库里还带了自研的
-[`tools/wx-mcp/`](tools/wx-mcp/) 插件（MCP），可以让我直接：
+[`tools/wx-mcp/`](tools/wx-mcp/) 插件（MCP），可以：
 环境自检 / 打开工程 / 出预览二维码 / 上传体验版 / 静态体检 / 编译 uni-app。
 
 ---
 
 ## License
 
-ISC。`static/`、`uni_modules/` 中的第三方资源版权归原作者（uView、uni-id 等）。
+ISC。`static/`、`uni_modules/`、`uview-ui/` 中的第三方资源版权归原作者。

@@ -525,6 +525,13 @@ module.exports = {
    */
   getAccountInfo,
   /**
+   * 兼容 uni-admin / 旧版 uni-id-pages：返回当前登录用户的基础资料
+   */
+  async getUserInfo () {
+    // 兼容旧版 uni-id-pages 的探测调用；后台实际资料走客户端 JQL。
+    return { errCode: 0, userInfo: {} }
+  },
+  /**
    * 创建图形验证码
    * @tutorial https://uniapp.dcloud.net.cn/uniCloud/uni-id-pages.html#create-captcha
    * @param {Object} params

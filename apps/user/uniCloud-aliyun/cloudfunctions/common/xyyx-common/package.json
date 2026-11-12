@@ -1,7 +1,0 @@
-{
-  "name": "xyyx-common",
-  "version": "1.0.0",
-  "description": "校递达后端公共模块：鉴权、字段裁剪、记账。依赖的 uni-id-common 由 uniCloud 作为公共模块自动注入，无需在此声明。",
-  "main": "index.js",
-  "dependencies": {}
-}

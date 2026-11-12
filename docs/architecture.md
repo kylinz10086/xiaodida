@@ -5,28 +5,30 @@
 ## 一、整体
 
 ```
-┌─────────────┐        ┌─────────────┐
-│  用户端      │        │  骑手端      │
-│ apps/user   │        │ apps/rider  │
-│ (uni-app)   │        │ (uni-app)   │
-└──────┬──────┘        └──────┬──────┘
-       │ uniCloud.importObject│
-       │  xyyx-user           │  xyyx-rider
-       └──────────┬───────────┘
-                  ▼
+┌──────────────────────────────────────┐
+│  校递达小程序（一个 App，两种身份）    │
+│  apps/user                           │
+│  用户页 /pages/xyyx  骑手页 /pages/rider  聊天 /pages/chat │
+│  (uni-app Vue2 + uView)              │
+└──────┬───────────────────────────────┘
+       │ uniCloud.importObject
+       │  xyyx-user（用户）  xyyx-rider（骑手）
+       ▼
         ┌───────────────────┐
-        │  uniCloud 阿里云   │
+        │  uniCloud 支付宝云 │
         │  env-00jy72ju8b4z │
         ├───────────────────┤
-        │ xyyx-common       │  鉴权 / 裁剪 / 记账（公共模块）
+        │ xyyx-common       │  鉴权 / 裁剪 / 记账 / 聊天（公共模块）
         │ xyyx-user         │  用户端云对象
         │ xyyx-rider        │  骑手端云对象
         │ xyyx-pay          │  微信支付 V3 / mock
+        │ xyyx-admin        │  后台
+        │ xyyx-cron         │  定时任务
         │ uni-id-co         │  登录注册（uni-id-pages 提供）
         └─────────┬─────────┘
                   ▼
         ┌───────────────────┐
-        │ MongoDB（8 张表）  │
+        │ MongoDB（10 张表） │
         │ 权限全 false       │
         └───────────────────┘
                   ▲
@@ -59,7 +61,7 @@
  │                       │                      ├──────────────────▶│
  │ confirmReceipt        │                      │                   │
  ├──────────────────────▶│ settleTask: 2→3 ─────┼──────────────────▶│
- │                       │ 骑手 +90% / 平台 +10% │                   │
+ │                       │ 骑手 +95% / 平台 +5%  │                   │
  │                       │ 写 income/commission  │                   │
  │                       │ /escrow_out 流水      │                   │
 ```

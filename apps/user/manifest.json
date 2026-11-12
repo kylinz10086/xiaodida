@@ -2,8 +2,8 @@
     "name" : "校递达",
     "appid" : "__UNI__1808C67",
     "description" : "校递达 —— 校园快递代取 / 代带餐食互助小程序",
-    "versionName" : "1.8.4",
-    "versionCode" : "100",
+    "versionName" : "1.9.1",
+    "versionCode" : "191",
     "transformPx" : false,
     "app-plus" : {
         "optimization" : {
@@ -57,9 +57,7 @@
             "ios" : {
                 "capabilities" : {
                     "entitlements" : {
-                        "com.apple.developer.associated-domains" : [
-                            "applinks:static-env-00jy72ju8b4z.next.bspapp.com"
-                        ]
+                        "com.apple.developer.associated-domains" : [ "applinks:static-env-00jy72ju8b4z.next.bspapp.com" ]
                     }
                 }
             },
@@ -109,7 +107,7 @@
     },
     "quickapp" : {},
     "mp-weixin" : {
-        "appid" : "wxab71ca588522f56d",
+        "appid" : null,
         "setting" : {
             "urlCheck" : false,
             "es6" : false,
@@ -122,9 +120,10 @@
         "usingComponents" : true,
         "permission" : {
             "scope.userLocation" : {
-                "desc" : "用于路线规划和定位服务"
+                "desc" : "用于取件/送达定位与路线导航"
             }
-        }
+        },
+        "requiredPrivateInfos" : [ "getLocation", "chooseLocation" ]
     },
     "mp-alipay" : {
         "usingComponents" : true,

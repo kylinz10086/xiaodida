@@ -172,6 +172,10 @@
 					<u-input v-model="phoneNumber" placeholder="接收任务通知" type="number" :border="false" :maxlength="11" />
 				</view>
 			</view>
+			<view class="contact-tip">
+				<text v-if="sameAsAccountMobile">已使用账号绑定的手机号，骑手接单后可见（脱敏）</text>
+				<text v-else>骑手需要通过该号码联系你，请填写真实手机号</text>
+			</view>
 			<view class="form-row">
 				<view class="form-label">微信号</view>
 				<view class="form-input-wrap small">
@@ -211,6 +215,18 @@
 			v-model="isShowTimePicker"></u-picker>
 
 		<view class="submit-section">
+			<!-- 付款前必须说清楚：退款规则（默认全额退，后台配了费率才会扣） -->
+			<view class="pay-notice" v-if="optionPageType == 'release'">
+				<text class="pay-notice-title">支付说明</text>
+				<text class="pay-notice-text" v-if="refundFeeRate > 0">
+					下单需先支付 ¥{{ requirePrice || 0 }} 到平台托管。若你取消订单或降价改单，
+					退款将扣除 {{ refundFeePercent }} 微信支付通道费，实际退回约 ¥{{ refundPreview }}。
+				</text>
+				<text class="pay-notice-text" v-else>
+					下单需先支付 ¥{{ requirePrice || 0 }} 到平台托管。若你取消订单或降价改单，
+					已付金额将全额原路退回。
+				</text>
+			</view>
 			<view v-if="optionPageType == 'release'" class="submit-buttons">
 				<u-button class="btn-cancel" @click="backtoprepage">取消</u-button>
 				<u-button class="btn-submit" type="primary" @click="releaseReq" :loading="submitting">发布任务</u-button>
@@ -228,7 +244,6 @@
 	import { mapActions, mapGetters } from 'vuex';
 	import UserInfoListItem from '../components/user-info-list-item.vue';
 	import Moment from '../utils/moment/moment.js';
-	import qiniuUploader from '../utils/qiniuUploader-min.js';
 
 	export default {
 		components: {
@@ -240,7 +255,7 @@
 				optionPageType: 'release',
 				editTaskId: null,
 				currentType: 1,
-				typeList: ['快递', '带餐', '代购', '其他'],
+				typeList: ['快递代取', '代带餐食', '其他'],
 				taskTitle: '',
 				requirementDetail: '',
 				itemType: '',
@@ -248,6 +263,8 @@
 				itemWeight: '',
 				sizeOptions: ['小件', '中件', '大件', '超大件'],
 				phoneNumber: '',
+				/** 账号绑定的手机号，用来判断当前填的是不是「我的号码」 */
+				accountMobile: '',
 				wechatId: '',
 				remark: '',
 				isShowTimePicker: false,
@@ -283,6 +300,25 @@
 			...mapGetters(['getMyTasks']),
 			typeText() {
 				return this.typeList[this.currentType - 1] || '其他';
+			},
+			sameAsAccountMobile() {
+				return !!this.accountMobile && this.phoneNumber === this.accountMobile;
+			},
+			/** 退款扣除费率（服务端下发，默认 0 = 全额退），用来在下单前把话说清楚 */
+			refundFeeRate() {
+				const r = this.$store && this.$store.state.profile && this.$store.state.profile.refund_fee_rate;
+				return typeof r === 'number' ? r : 0;
+			},
+			refundFeePercent() {
+				return (this.refundFeeRate * 100).toFixed(1).replace(/\.0$/, '') + '%';
+			},
+			/** 取消/降价时大约能退回多少（给用户一个直观数字） */
+			refundPreview() {
+				const amount = Number(this.requirePrice) || 0;
+				if (amount <= 0) return '0.00';
+				const cents = Math.round(amount * 100);
+				const fee = Math.min(Math.round(cents * this.refundFeeRate), Math.max(0, cents - 1));
+				return ((cents - fee) / 100).toFixed(2);
 			}
 		},
 		onLoad: function(option) {
@@ -298,9 +334,28 @@
 				});
 				this.loadTaskData();
 			}
+			// 改单时优先用任务里原来的号码，只有空着才补账号号码
+			this.prefillMobile();
 		},
 		methods: {
-			...mapActions(['publishTask', 'publishAndPay', 'cancelTask']),
+			...mapActions(['publishTask', 'publishAndPay', 'cancelTask', 'updateTask', 'payOrder', 'fetchUserInfo']),
+			/**
+			 * 联系方式直接从账号资料带过来：号码在「我的-手机号」维护过一次，
+			 * 发布任务时就不该再手打一遍。
+			 */
+			async prefillMobile() {
+				const cached = uni.getStorageSync('userInfo');
+				if (cached && cached.mobile) this.accountMobile = cached.mobile;
+				if (!this.accountMobile) {
+					try {
+						const profile = await this.fetchUserInfo();
+						if (profile && profile.mobile) this.accountMobile = profile.mobile;
+					} catch (e) {
+						// 未登录 / 断网时保持手填，不打断发布流程
+					}
+				}
+				if (!this.phoneNumber && this.accountMobile) this.phoneNumber = this.accountMobile;
+			},
 			loadTaskData() {
 				const taskId = uni.getStorageSync('currentEditTaskId');
 				if (taskId) {
@@ -321,6 +376,14 @@
 						this.remark = task.remark || '';
 						this.origin = task.origin || { name: '', position: '' };
 						this.destination = task.destination || { name: '', position: '' };
+						// 数据库里存的是经纬度，页面用的是 'lng,lat' 字符串，这里补回来，
+						// 否则编辑时「查看路线」会是 undefined,undefined
+						if (this.origin && !this.origin.position && this.origin.longitude && this.origin.latitude) {
+							this.origin.position = this.origin.longitude + ',' + this.origin.latitude;
+						}
+						if (this.destination && !this.destination.position && this.destination.longitude && this.destination.latitude) {
+							this.destination.position = this.destination.longitude + ',' + this.destination.latitude;
+						}
 						this.ceshiData = task.images || [];
 					}
 					uni.removeStorageSync('currentEditTaskId');
@@ -353,9 +416,13 @@
 			pickOriginAddress: function() {
 				uni.chooseLocation({
 					success: (res) => {
+						// 同时存 position（旧字段）和经纬度（骑手端地图/导航要用）
 						this.origin = {
 							name: res.name || res.address,
-							position: res.longitude + ',' + res.latitude
+							detail: res.address || '',
+							position: res.longitude + ',' + res.latitude,
+							latitude: res.latitude,
+							longitude: res.longitude
 						};
 					}
 				});
@@ -365,34 +432,28 @@
 					success: (res) => {
 						this.destination = {
 							name: res.name || res.address,
-							position: res.longitude + ',' + res.latitude
+							detail: res.address || '',
+							position: res.longitude + ',' + res.latitude,
+							latitude: res.latitude,
+							longitude: res.longitude
 						};
 					}
 				});
 			},
 			ceshiChooseSuccess: async function(params) {
-				let data = await uni.request({
-					url: 'https://p32608e355.eicp.vip/upToken'
-				});
-				if (data[1] && data[1].data && data[1].data.code == 200) {
-					let token = data[1].data.token;
-					params.map((filePath) => {
-						let tt = filePath.split('/');
-						let filename = tt[tt.length-1];
-						uni.uploadFile({
-							url: 'https://upload-z1.qiniup.com', 
-							filePath: filePath,
-							name: 'file',
-							formData: {
-								'key': filename,
-								'token': token
-							},
-							success: (uploadFileRes) => {
-								let data = JSON.parse(uploadFileRes.data);
-								this.ceshiData.push("http://r1dyssfm5.hb-bkt.clouddn.com/"+data.key);
-							}
+				// 图片传到 uniCloud 云存储。以前那套七牛上传依赖一个外部 upToken 服务，
+				// 域名不在小程序白名单里，而且用户图片会落到别人的 bucket 上 —— 已弃用。
+				for (const filePath of params) {
+					try {
+						const ext = (filePath.match(/\.(\w+)$/) || [])[1] || 'jpg';
+						const up = await uniCloud.uploadFile({
+							filePath,
+							cloudPath: 'xyyx-tasks/' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.' + ext
 						});
-					});
+						if (up.fileID) this.ceshiData.push(up.fileID);
+					} catch (e) {
+						uni.showToast({ title: '图片上传失败，稍后再试', icon: 'none' });
+					}
 				}
 			},
 			validateForm() {
@@ -445,6 +506,14 @@
 					});
 					return false;
 				}
+				// 服务端也要求 11 位手机号（骑手要打电话联系），这里先拦一道，别等付完款才报错
+				if (!/^1\d{10}$/.test(String(this.phoneNumber || '').trim())) {
+					uni.showToast({
+						title: '请填写正确的手机号',
+						icon: 'none'
+					});
+					return false;
+				}
 				return true;
 			},
 			backtoprepage: function() {
@@ -476,15 +545,49 @@
 					images: this.ceshiData
 				};
 				
+				// 有弹窗时要等用户看完再跳转，否则弹窗刚出来页面就被切走了
+				const goOrders = () => {
+					setTimeout(() => {
+						uni.switchTab({
+						    url: '/pages/xyyx/order/order'
+						});
+					}, 1200);
+				};
+
 				try {
 					if (this.optionPageType === 'edit' && this.editTaskId) {
-						await this.cancelTask({ taskId: this.editTaskId, reason: '重新发布' });
-						await this.publishAndPay(taskData);
-						uni.showToast({
-							duration: 1500,
-							icon: 'success',
-							title: '修改成功！'
-						});
+						// 修改订单：原地更新同一个订单号，不再「取消旧单 + 重新全额付款」
+						const info = await this.updateTask({ ...taskData, taskId: this.editTaskId });
+						if (info.needPay) {
+							// 涨价：只补差价，不会重复收全款
+							await this.payOrder({ taskId: this.editTaskId });
+							uni.showModal({
+								title: '修改成功',
+								content: `订单金额 ¥${info.oldAmount} → ¥${info.amount}，已补付差价 ¥${info.payAmount}。`,
+								showCancel: false,
+								success: goOrders,
+								fail: goOrders
+							});
+						} else if (info.refund && Number(info.refund) > 0) {
+							// 降价：差额已在服务端当场提交退款，文案直接用服务端返回的
+							const modeTip = info.refundMode === 'balance'
+								? '（已退回账户余额）'
+								: '（原路退回微信，可在「微信支付」账单里查看到账记录）';
+							uni.showModal({
+								title: '修改成功',
+								content: (info.msg || `已退回差价 ¥${info.refund}`) + modeTip,
+								showCancel: false,
+								success: goOrders,
+								fail: goOrders
+							});
+						} else {
+							uni.showToast({
+								duration: 1500,
+								icon: 'success',
+								title: info.msg || '修改成功！'
+							});
+							goOrders();
+						}
 					} else {
 						// 发布后立刻走支付（配了商户证书是微信支付，没配是模拟支付）
 						await this.publishAndPay(taskData);
@@ -493,13 +596,8 @@
 							icon: 'success',
 							title: '下单成功！'
 						});
+						goOrders();
 					}
-					
-					setTimeout(() => {
-						uni.switchTab({
-						    url: '/pages/xyyx/order/order'
-						});
-					}, 1500);
 				} catch (e) {
 					uni.showToast({
 						title: e.message || '操作失败',
@@ -515,18 +613,16 @@
 			confirmWithdraw: async function() {
 				if (this.editTaskId) {
 					try {
-						await this.cancelTask({ taskId: this.editTaskId, reason: '用户取消' });
+						const r = await this.cancelTask({ taskId: this.editTaskId, reason: '用户取消' });
 						this.showDeleteModal = false;
-						uni.showToast({
-							duration: 1500,
-							icon: 'success',
-							title: '删除成功！'
+						// 用弹窗而不是 toast：退款金额和手续费要让人看清
+						uni.showModal({
+							title: '订单已取消',
+							content: (r && r.msg) || '订单已取消',
+							showCancel: false,
+							success: () => uni.switchTab({ url: '/pages/xyyx/order/order' }),
+							fail: () => uni.switchTab({ url: '/pages/xyyx/order/order' })
 						});
-						setTimeout(() => {
-							uni.switchTab({
-							    url: '/pages/xyyx/order/order'
-							});
-						}, 1500);
 					} catch (e) {
 						uni.showToast({
 							title: e.message || '删除失败',
@@ -539,8 +635,18 @@
 				this.showDeleteModal = false;
 			},
 			openRouteMap: function() {
-				uni.navigateTo({
-					url: '/pages/xyyx/route-detail/route-detail?sposition='+this.origin.position+'&eposition='+this.destination.position
+				// 用微信内置地图看取件点，不再跳老模板里那套 amap 导航页（那套要 position 字段，新数据没有）
+				const o = this.origin || {};
+				if (!o.latitude || !o.longitude) {
+					uni.showToast({ title: '这个地点还没有坐标，重新选一次', icon: 'none' });
+					return;
+				}
+				uni.openLocation({
+					latitude: Number(o.latitude),
+					longitude: Number(o.longitude),
+					name: o.name || '取件点',
+					address: o.detail || '',
+					scale: 18
 				});
 			}
 		}
@@ -551,7 +657,8 @@
 	.release-requirement-page {
 		background-color: #F2F2F7;
 		min-height: 100vh;
-		padding-bottom: 140rpx;
+		/* 底部固定条里多了「支付说明」，留够空间别挡住表单 */
+		padding-bottom: 360rpx;
 	}
 	
 	.form-section {
@@ -624,6 +731,14 @@
 		width: 160rpx;
 		flex-shrink: 0;
 		font-weight: 500;
+	}
+	
+	/* 手机号说明：跟着输入框对齐，不单独占一行标题 */
+	.contact-tip {
+		margin: -10rpx 0 20rpx 160rpx;
+		font-size: 22rpx;
+		line-height: 1.5;
+		color: #8E8E93;
 	}
 	
 	.size-options {
@@ -842,6 +957,30 @@
 	.submit-buttons {
 		display: flex;
 		gap: 16rpx;
+	}
+
+	/* 付款前的费用说明：固定底栏上方，必须看得见 */
+	.pay-notice {
+		background-color: #FFF7E6;
+		border: 1rpx solid #FFE0A3;
+		border-radius: 12rpx;
+		padding: 16rpx 20rpx;
+		margin-bottom: 14rpx;
+		display: flex;
+		flex-direction: column;
+		gap: 6rpx;
+	}
+
+	.pay-notice-title {
+		font-size: 24rpx;
+		font-weight: 600;
+		color: #AD6800;
+	}
+
+	.pay-notice-text {
+		font-size: 22rpx;
+		line-height: 1.55;
+		color: #AD6800;
 	}
 	
 	.btn-cancel {

@@ -12,7 +12,51 @@
 			<view class="task-title">{{taskData.title}}</view>
 			<view class="price-display">
 				<text class="price-symbol">¥</text>
-				<text class="price-value">{{taskData.money}}</text>
+				<text class="price-value">{{ money(taskData.money) }}</text>
+			</view>
+		</view>
+
+		<view class="detail-section" v-if="taskData.status">
+			<view class="section-title">订单进度</view>
+			<view class="timeline" v-if="taskData.status !== 4">
+				<view class="tl" :class="{ on: !!taskData.pay_time }">
+					<text class="tl-dot"></text>
+					<view class="tl-main">
+						<text class="tl-title">已支付</text>
+						<text class="tl-time">{{ taskData.pay_time ? formatTime(taskData.pay_time) : '待支付' }}</text>
+					</view>
+				</view>
+				<view class="tl" :class="{ on: !!taskData.accept_time }">
+					<text class="tl-dot"></text>
+					<view class="tl-main">
+						<text class="tl-title">已接单</text>
+						<text class="tl-time">{{ taskData.accept_time ? formatTime(taskData.accept_time) : '等待骑手接单' }}</text>
+					</view>
+				</view>
+				<view class="tl" :class="{ on: !!taskData.picked_time }">
+					<text class="tl-dot"></text>
+					<view class="tl-main">
+						<text class="tl-title">已取件</text>
+						<text class="tl-time">{{ taskData.picked_time ? formatTime(taskData.picked_time) : '骑手取件后会更新' }}</text>
+					</view>
+				</view>
+				<view class="tl" :class="{ on: !!taskData.delivered_time }">
+					<text class="tl-dot"></text>
+					<view class="tl-main">
+						<text class="tl-title">已送达</text>
+						<text class="tl-time">{{ taskData.delivered_time ? formatTime(taskData.delivered_time) : '等待送达' }}</text>
+					</view>
+				</view>
+				<view class="tl" :class="{ on: taskData.status === 3 }">
+					<text class="tl-dot"></text>
+					<view class="tl-main">
+						<text class="tl-title">已完成</text>
+						<text class="tl-time">{{ taskData.complete_time ? formatTime(taskData.complete_time) : '送达后自动结算' }}</text>
+					</view>
+				</view>
+			</view>
+			<view class="cancelled" v-else>
+				<text>订单已取消{{ taskData.cancel_time ? ' · ' + formatTime(taskData.cancel_time) : '' }}</text>
 			</view>
 		</view>
 
@@ -97,12 +141,17 @@
 			<view class="section-content">{{taskData.remark}}</view>
 		</view>
 
-		<view class="detail-section" v-if="taskData.runner_name && taskData.status >= 2">
-			<view class="section-title">跑腿员信息</view>
-			<view class="runner-info">
-				<view class="runner-item">
-					<text class="runner-label">接单人</text>
-					<text class="runner-value">{{taskData.runner_name}}</text>
+		<view class="detail-section" v-if="taskData.rider && taskData.status >= 2">
+			<view class="section-title">跑腿员</view>
+			<view class="rider-card">
+				<image class="rider-avatar" :src="taskData.rider.avatar || '/static/icon/head1.png'" mode="aspectFill"></image>
+				<view class="rider-main">
+					<text class="rider-name">{{ taskData.rider.nickname || '骑手' }}</text>
+					<text class="rider-meta">{{ riderMeta }}</text>
+				</view>
+				<view class="chat-btn-sm" v-if="taskData.role === 'publisher' || taskData.role === 'runner'" @click="goChat">
+					<text>发消息</text>
+					<text class="chat-dot" v-if="chatUnread > 0">{{ chatUnread > 99 ? '99+' : chatUnread }}</text>
 				</view>
 			</view>
 		</view>
@@ -117,36 +166,82 @@
 			</view>
 		</view>
 
+		<!-- 支付与退款：改价后到底是「补差价」还是「退了差价」，这里说清楚 -->
+		<view class="detail-section" v-if="taskData.role === 'publisher' && (taskData.paid || taskData.needPay || taskData.hasRefund)">
+			<view class="section-title">支付与退款</view>
+			<view class="runner-info">
+				<view class="runner-item">
+					<text class="runner-label">订单金额</text>
+					<text class="runner-value">¥{{taskData.money}}</text>
+				</view>
+				<view class="runner-item" v-if="taskData.paid">
+					<text class="runner-label">实付金额</text>
+					<text class="runner-value">¥{{taskData.paid}}</text>
+				</view>
+				<view class="runner-item" v-if="taskData.needPay">
+					<text class="runner-label">待补差价</text>
+					<text class="runner-value warn">¥{{taskData.due}}</text>
+				</view>
+				<view class="runner-item" v-if="taskData.hasRefund">
+					<text class="runner-label">{{taskData.refundStatusText || '已退款'}}</text>
+					<text class="runner-value ok">¥{{taskData.refund}}</text>
+				</view>
+				<view class="runner-item" v-if="taskData.refundFee > 0">
+					<text class="runner-label">其中通道手续费</text>
+					<text class="runner-value">¥{{taskData.refundFee}}</text>
+				</view>
+			</view>
+			<!-- 退款失败要说清原因，否则用户只看到「退款失败」四个字 -->
+			<view class="refund-fail" v-if="taskData.refundStatus === 'failed' && taskData.refundFailReason">
+				<text>退款失败：{{taskData.refundFailReason}}</text>
+				<text class="refund-fail-tip">系统会自动重试，也可以联系客服人工处理</text>
+			</view>
+		</view>
+
 		<view class="detail-footer">
 			<view class="publish-time">发布时间：{{formatTime(taskData.create_time)}}</view>
 		</view>
 
-		<view class="action-section" v-if="optionPageType === 'notcomplete' && taskData.role !== 'publisher'">
-			<view class="action-btn cancel" @click="goBack">返回</view>
-			<view class="action-btn confirm" @click="pickOrder">接单</view>
+		<!-- 底部动作：按「身份 + 状态」给真正能用的按钮，不出现点了必然失败的入口 -->
+		<view class="action-section" v-if="taskData.role === 'publisher'">
+			<block v-if="taskData.status === 1">
+				<view class="action-btn cancel" @click="cancelOrder">取消订单</view>
+				<view class="action-btn confirm" @click="editOrder">修改订单</view>
+			</block>
+			<block v-else-if="taskData.status === 2 && taskData.delivered_time > 0">
+				<view class="action-btn cancel" @click="goBack">返回</view>
+				<view class="action-btn complete" @click="confirmReceipt">确认收货</view>
+			</block>
+			<block v-else-if="taskData.status === 2">
+				<view class="action-btn cancel" @click="goBack">返回</view>
+				<view class="action-btn confirm" v-if="taskData.rider" @click="goChat">联系骑手</view>
+			</block>
+			<block v-else>
+				<view class="action-btn cancel" @click="goBack">返回</view>
+			</block>
 		</view>
 
-		<view class="action-section" v-if="optionPageType === 'completed'">
+		<view class="action-section" v-else-if="taskData.role === 'runner'">
 			<view class="action-btn cancel" @click="goBack">返回</view>
+			<view class="action-btn confirm" @click="goRiderDetail">去骑手工作台</view>
 		</view>
 
-		<view class="action-section" v-if="optionPageType === 'in-transit'">
-			<view class="action-btn complete" @click="handleCompleteOrder" v-if="taskData.role === 'runner'">确认完成</view>
-			<view class="action-btn abandon" @click="giveupOrder" v-if="taskData.role === 'runner'">放弃订单</view>
-			<view class="action-btn confirm" @click="confirmComplete" v-if="taskData.role === 'publisher'">确认完成</view>
-			<view class="action-btn cancel" @click="goBack" v-if="taskData.role === 'publisher'">返回</view>
+		<view class="action-section" v-else>
+			<view class="action-btn cancel" @click="goBack">返回</view>
 		</view>
 	</view>
 </template>
 
 <script>
 	import { mapGetters, mapActions } from 'vuex';
+	import { navigateTo, fmtMoney } from '@/common/rider-util.js';
 
 	export default {
 		data() {
 			return {
 				optionPageType: 'completed',
-				taskId: null
+				taskId: null,
+				chatUnread: 0
 			};
 		},
 		computed: {
@@ -158,6 +253,14 @@
 			statusText() {
 				const map = { 1: '待接单', 2: '进行中', 3: '已完成', 4: '已取消' };
 				return map[this.taskData.status] || '待接单';
+			},
+			riderMeta() {
+				const r = this.taskData.rider || {};
+				const count = Number(r.accepted_count) || 0;
+				const rating = Number(r.rating) || 5;
+				// 单量太少时不展示 5.0，避免「新骑手」看起来像满分老手
+				const ratingText = count < 3 ? '新骑手' : rating.toFixed(1) + ' 分';
+				return ratingText + ' · 已完成 ' + count + ' 单';
 			}
 		},
 		onLoad(option) {
@@ -165,8 +268,75 @@
 			this.taskId = uni.getStorageSync('currentViewTaskId');
 			if (this.taskId) uni.removeStorageSync('currentViewTaskId');
 		},
+		onShow() {
+			if (this.taskId) {
+				this.$store.dispatch('fetchDetail', this.taskId).catch(() => {});
+				this.loadChatUnread();
+			}
+		},
 		methods: {
 			...mapActions(['acceptTask', 'completeTask', 'confirmTask', 'abandonTask']),
+			money(v) {
+				return fmtMoney(v);
+			},
+			async loadChatUnread() {
+				try {
+					this.chatUnread = await this.$store.dispatch('chatUnread', this.taskId);
+				} catch (e) {
+					this.chatUnread = 0;
+				}
+			},
+			goChat() {
+				if (!this.taskId) return;
+				uni.navigateTo({ url: '/pages/chat/chat?taskId=' + this.taskId + '&role=user' });
+			},
+			editOrder() {
+				if (!this.taskId) return;
+				uni.setStorageSync('currentEditTaskId', this.taskId);
+				uni.navigateTo({
+					url: '/pages/xyyx/release-requirements/release-requirements?item=' + (this.taskData.type || 1) + '&type=edit'
+				});
+			},
+			async cancelOrder() {
+				const ok = await new Promise((resolve) => {
+					uni.showModal({
+						title: '取消订单',
+						content: '取消后，已付金额会原路退回。确定取消吗？',
+						confirmText: '取消订单',
+						confirmColor: '#FF3B30',
+						success: (r) => resolve(!!r.confirm)
+					});
+				});
+				if (!ok) return;
+				try {
+					const res = await this.$store.dispatch('cancelTask', { taskId: this.taskId, reason: '用户取消' });
+					uni.showToast({ title: (res && res.msg) || '已取消', icon: 'none' });
+					setTimeout(() => uni.navigateBack(), 900);
+				} catch (e) {
+					uni.showToast({ title: (e && e.message) || '取消失败', icon: 'none' });
+				}
+			},
+			async confirmReceipt() {
+				const ok = await new Promise((resolve) => {
+					uni.showModal({
+						title: '确认收货',
+						content: '确认已经收到东西？确认后款项会结算给骑手。',
+						confirmText: '确认收货',
+						success: (r) => resolve(!!r.confirm)
+					});
+				});
+				if (!ok) return;
+				try {
+					await this.$store.dispatch('confirmReceipt', this.taskId);
+					uni.showToast({ title: '已确认收货', icon: 'success' });
+					setTimeout(() => uni.navigateBack(), 900);
+				} catch (e) {
+					uni.showToast({ title: (e && e.message) || '操作失败', icon: 'none' });
+				}
+			},
+			goRiderDetail() {
+				uni.navigateTo({ url: '/pages/rider/detail?id=' + this.taskId });
+			},
 			formatTime(timestamp) {
 				if (!timestamp) return '';
 				const date = new Date(timestamp);
@@ -176,10 +346,8 @@
 				uni.navigateBack({ delta: 1 });
 			},
 			openRouteMap() {
-				if (this.taskData.origin && this.taskData.destination) {
-					uni.navigateTo({
-						url: '/pages/xyyx/route-detail/route-detail?sposition=' + this.taskData.origin.position + '&eposition=' + this.taskData.destination.position
-					});
+				if (this.taskData.origin && this.taskData.origin.name) {
+					navigateTo(this.taskData.origin, '取件点');
 				}
 			},
 			pickOrder() {
@@ -274,6 +442,101 @@
 	.point-name { font-size: 28rpx; color: #000; font-weight: 500; }
 	.route-line { width: 4rpx; height: 40rpx; background-color: #E5E5EA; margin-left: 18rpx; margin-top: 8rpx; margin-bottom: 8rpx; }
 	.route-map-btn { margin-top: 16rpx; padding: 20rpx; text-align: center; background-color: rgba(0, 122, 255, 0.1); border-radius: 16rpx; color: #007AFF; font-size: 28rpx; font-weight: 500; }
+	.chat-btn { display: flex; align-items: center; justify-content: center; }
+	.chat-dot {
+		margin-left: 10rpx;
+		min-width: 32rpx;
+		height: 32rpx;
+		line-height: 32rpx;
+		padding: 0 10rpx;
+		border-radius: 16rpx;
+		background: #FF3B30;
+		color: #fff;
+		font-size: 19rpx;
+		font-weight: 600;
+	}
+
+	.timeline { padding-left: 4rpx; }
+
+	.tl {
+		display: flex;
+		position: relative;
+		padding-bottom: 26rpx;
+
+		&:last-child { padding-bottom: 0; }
+	}
+
+	.tl::before {
+		content: '';
+		position: absolute;
+		left: 7rpx;
+		top: 24rpx;
+		bottom: 0;
+		width: 2rpx;
+		background: #eef0f3;
+	}
+
+	.tl:last-child::before { display: none; }
+
+	.tl-dot {
+		width: 16rpx;
+		height: 16rpx;
+		border-radius: 50%;
+		background: #dfe3ea;
+		margin: 8rpx 20rpx 0 0;
+		flex-shrink: 0;
+		z-index: 1;
+	}
+
+	.tl.on .tl-dot { background: #1677ff; }
+	.tl.on .tl-title { color: #1c1f24; font-weight: 600; }
+
+	.tl-main { display: flex; flex-direction: column; }
+	.tl-title { font-size: 27rpx; color: #5c6370; }
+	.tl-time { margin-top: 4rpx; font-size: 21rpx; color: #9aa1ad; }
+
+	.cancelled {
+		padding: 12rpx 0;
+		font-size: 26rpx;
+		color: #ff3b30;
+	}
+
+	.rider-card {
+		display: flex;
+		align-items: center;
+		padding: 12rpx 0 4rpx;
+	}
+
+	.rider-avatar {
+		width: 84rpx;
+		height: 84rpx;
+		border-radius: 50%;
+		background: #eef0f3;
+		flex-shrink: 0;
+	}
+
+	.rider-main {
+		flex: 1;
+		min-width: 0;
+		margin-left: 18rpx;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.rider-name { font-size: 29rpx; font-weight: 600; color: #1c1f24; }
+	.rider-meta { margin-top: 4rpx; font-size: 22rpx; color: #9aa1ad; }
+
+	.chat-btn-sm {
+		display: flex;
+		align-items: center;
+		padding: 12rpx 24rpx;
+		border-radius: 24rpx;
+		background: rgba(22, 119, 255, 0.1);
+		color: #1677ff;
+		font-size: 24rpx;
+		font-weight: 600;
+		flex-shrink: 0;
+	}
 	.time-display { display: flex; align-items: center; gap: 12rpx; }
 	.time-tag { padding: 12rpx 24rpx; background-color: rgba(0, 122, 255, 0.1); color: #007AFF; border-radius: 16rpx; font-size: 28rpx; font-weight: 500; }
 	.time-detail { font-size: 28rpx; color: #000; }
@@ -287,6 +550,14 @@
 	.runner-item { display: flex; justify-content: space-between; align-items: center; padding: 16rpx 20rpx; background-color: #F2F2F7; border-radius: 16rpx; }
 	.runner-label { font-size: 26rpx; color: #8E8E93; }
 	.runner-value { font-size: 28rpx; color: #000; font-weight: 500; }
+	.runner-value.warn { color: #FF9500; }
+	.runner-value.ok { color: #34C759; }
+	.refund-fail {
+		display: flex; flex-direction: column; gap: 6rpx;
+		margin-top: 14rpx; padding: 16rpx 20rpx; border-radius: 14rpx;
+		background: rgba(255, 59, 48, 0.08); color: #C62828; font-size: 24rpx;
+	}
+	.refund-fail-tip { color: #8E8E93; font-size: 22rpx; }
 	.detail-footer { padding: 20rpx 32rpx; text-align: center; }
 	.publish-time { font-size: 24rpx; color: #8E8E93; }
 	.action-section { position: fixed; bottom: 0; left: 0; right: 0; background-color: #F2F2F7; padding: 16rpx 32rpx; padding-bottom: calc(16rpx + env(safe-area-inset-bottom)); display: flex; gap: 16rpx; }

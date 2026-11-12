@@ -14,5 +14,10 @@
 	"xyyx-nonces": {},
 	"xyyx-ratelimits": {},
 	"xyyx-agreements": {},
-	"xyyx-reviews": {}
+	"xyyx-reviews": {},
+	"xyyx-refunds": {},
+	"xyyx-payorders": {},
+	"xyyx-settings": {},
+	"xyyx-messages": {},
+	"xyyx-feedback": {}
 }

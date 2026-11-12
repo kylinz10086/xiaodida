@@ -120,7 +120,24 @@
 
 ---
 
-## 9. 数据库初始化
+## 9. `xyyx-messages` —— 订单内聊天
 
-`apps/user/uniCloud-aliyun/database/db_init.json` 列出了所有集合。
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `task_id` | string | 所属订单 |
+| `from_id` | string | 发送者 uid；`system` 表示系统提示 |
+| `to_id` | string | 接收者 uid |
+| `content` | string | 文字（≤300 字）或图片 `fileID` |
+| `type` | string | `text` / `image` / `system` |
+| `read_at` | timestamp | 已读时间；0 未读 |
+| `create_time` | timestamp | 发送时间 |
+
+索引：`(task_id, create_time)`、`(to_id, read_at)`。只有该单的发布者和骑手能读写，
+`permission` 同样为 `false`，读写在云对象里做成员校验。
+
+---
+
+## 10. 数据库初始化
+
+`apps/user/uniCloud-alipay/database/db_init.json` 列出了所有集合。
 HBuilderX：右键 `database` → 上传所有 DB Schema → 右键 `db_init.json` → 初始化云数据库。

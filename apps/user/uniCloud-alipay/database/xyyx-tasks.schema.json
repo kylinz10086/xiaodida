@@ -10,10 +10,29 @@
     "type_text": { "bsonType": "string", "description": "类型中文" },
     "description": { "bsonType": "string", "maxLength": 300, "description": "详细描述" },
 
-    "amount_cent": { "bsonType": "int", "minimum": 100, "description": "订单金额（分）" },
+    "amount_cent": { "bsonType": "int", "minimum": 100, "description": "订单金额（分），改价后为最新价格" },
     "commission_cent": { "bsonType": "int", "description": "平台佣金（分），结算时写入" },
     "rider_income_cent": { "bsonType": "int", "description": "骑手实得（分），结算时写入" },
-    "refund_cent": { "bsonType": "int", "description": "退款金额（分），取消时写入" },
+    "refund_cent": { "bsonType": "int", "description": "累计已退金额（分）" },
+    "refund_status": {
+      "bsonType": "string",
+      "enum": ["", "processing", "partial", "done", "failed"],
+      "description": "退款进度：空=没退过 / 退款中 / 部分退款 / 已退完 / 退款失败"
+    },
+    "paid_cent": { "bsonType": "int", "description": "累计实付金额（分），含涨价补的差价" },
+    "due_cent": {
+      "bsonType": "int",
+      "description": "改价涨价后还差多少没付（分）。>0 时 pay_status 为 partial，订单不进大厅"
+    },
+    "payments": {
+      "bsonType": "array",
+      "description": "支付明细：[{ no: out_trade_no, cent, type: full|topup, time, refunded }]，退款按这里逐笔发起"
+    },
+    "pending_pay_no": { "bsonType": "string", "description": "本轮待支付的 out_trade_no" },
+    "pending_pay_cent": { "bsonType": "int", "description": "本轮应支付的金额（分）" },
+    "pending_pay_time": { "bsonType": "timestamp" },
+    "update_count": { "bsonType": "int", "description": "被修改过几次" },
+    "update_time": { "bsonType": "timestamp" },
 
     "item_type": { "bsonType": "string", "maxLength": 20, "description": "物品类型" },
     "item_size": { "bsonType": "string", "maxLength": 20, "description": "物品大小" },
@@ -47,7 +66,11 @@
     "images": { "bsonType": "array", "maxItems": 6, "description": "图片地址列表" },
 
     "status": { "bsonType": "int", "enum": [1, 2, 3, 4, 5], "description": "1待接单 2进行中 3已完成 4已取消 5售后" },
-    "pay_status": { "bsonType": "string", "enum": ["unpaid", "paid", "refunded"], "description": "支付状态" },
+    "pay_status": {
+      "bsonType": "string",
+      "enum": ["unpaid", "partial", "paid", "refunding", "refunded"],
+      "description": "支付状态：未支付 / 已付一部分（涨价待补差价） / 已付清 / 退款中 / 已退款"
+    },
     "pay_mode": { "bsonType": "string", "description": "mock / wechat" },
     "transaction_id": { "bsonType": "string", "description": "微信支付单号" },
 

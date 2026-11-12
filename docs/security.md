@@ -15,7 +15,7 @@
 **处理**：
 
 1. 打开 [微信公众平台](https://mp.weixin.qq.com/) → 开发管理 → 开发设置 → **重置 AppSecret**
-2. 把新的 AppSecret 填进本地 `apps/user/uniCloud-aliyun/cloudfunctions/common/uni-config-center/uni-id/config.json`
+2. 把新的 AppSecret 填进本地 `apps/user/uniCloud-alipay/cloudfunctions/common/uni-config-center/uni-id/config.json`
    （该文件已在 `.gitignore` 中，不会被提交）
 3. 重置后旧的 AppSecret 立即失效，历史泄露无危害
 
@@ -50,7 +50,7 @@
 | 比对 | `crypto.timingSafeEqual`，防时序侧信道 |
 | 格式 | `scrypt$v1$<salt_b64>$<hash_b64>` |
 
-实现：`apps/user/uniCloud-aliyun/cloudfunctions/common/uni-config-center/uni-id/custom-password.js`
+实现：`apps/user/uniCloud-alipay/cloudfunctions/common/uni-config-center/uni-id/custom-password.js`
 
 > 原实现是 `passwordHash: password` —— **明文存储**。已废弃，且旧格式密码一律判定不匹配，强制重设。
 

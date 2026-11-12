@@ -1,0 +1,24 @@
+{
+  "indexes": [
+    {
+      "IndexName": "task_time",
+      "MgoKeySchema": {
+        "MgoIndexKeys": [
+          { "Name": "task_id", "Direction": "1" },
+          { "Name": "create_time", "Direction": "1" }
+        ],
+        "MgoIsUnique": false
+      }
+    },
+    {
+      "IndexName": "to_unread",
+      "MgoKeySchema": {
+        "MgoIndexKeys": [
+          { "Name": "to_id", "Direction": "1" },
+          { "Name": "read_at", "Direction": "1" }
+        ],
+        "MgoIsUnique": false
+      }
+    }
+  ]
+}

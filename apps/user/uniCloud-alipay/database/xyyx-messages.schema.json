@@ -1,0 +1,16 @@
+{
+  "bsonType": "object",
+  "required": ["task_id", "from_id", "to_id", "content", "create_time"],
+  "permission": { "read": false, "create": false, "update": false, "delete": false },
+  "description": "订单内聊天消息。只有该订单的发布者和骑手能读写，全部经云对象，客户端无权限。",
+  "properties": {
+    "_id": { "description": "消息ID" },
+    "task_id": { "bsonType": "string", "description": "所属订单ID" },
+    "from_id": { "bsonType": "string", "description": "发送者ID；system 表示系统提示" },
+    "to_id": { "bsonType": "string", "description": "接收者ID" },
+    "content": { "bsonType": "string", "maxLength": 300, "description": "消息正文（纯文本）" },
+    "type": { "bsonType": "string", "enum": ["text", "system", "image"], "description": "消息类型" },
+    "read_at": { "bsonType": "timestamp", "description": "已读时间；0 表示未读" },
+    "create_time": { "bsonType": "timestamp", "description": "发送时间" }
+  }
+}

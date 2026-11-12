@@ -13,8 +13,23 @@
 
     "rider_status": { "bsonType": "int", "description": "骑手状态 0未申请 1审核中 2已通过 3已拒绝" },
     "real_name": { "bsonType": "string", "description": "真实姓名（仅平台审核可见，绝不下发给用户端）" },
-    "student_no": { "bsonType": "string", "description": "学号（仅平台审核可见）" },
+    "student_no": { "bsonType": "string", "description": "学号：15 位 = 4 位入学学年 + 6 位学院专业号 + 5 位班级学号（仅平台审核可见）" },
+    "student_info": {
+      "bsonType": "object",
+      "description": "学号解析结果，供后台/本人分段展示，避免 15 位数字被看错",
+      "properties": {
+        "valid": { "bsonType": "bool" },
+        "year": { "bsonType": "string", "description": "入学学年，如 2025" },
+        "major": { "bsonType": "string", "description": "学院+专业号，如 122114" },
+        "class_no": { "bsonType": "string", "description": "班级+学号，如 04009" },
+        "display": { "bsonType": "string", "description": "展示串：2025 学年 · 122114 · 04009" }
+      }
+    },
     "rider_apply_time": { "bsonType": "timestamp", "description": "申请成为骑手的时间" },
+    "rider_approved_time": { "bsonType": "timestamp", "description": "审核通过时间" },
+    "rider_review_time": { "bsonType": "timestamp", "description": "最近一次审核时间" },
+    "rider_review_by": { "bsonType": "string", "description": "审核人 uid" },
+    "rider_reject_reason": { "bsonType": "string", "description": "审核拒绝原因" },
 
     "rating": { "bsonType": "double", "description": "骑手评分 0-5" },
     "rider_rating_count": { "bsonType": "int", "description": "被评价次数" },

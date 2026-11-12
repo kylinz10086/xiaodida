@@ -12,16 +12,27 @@
  * 用法：node tools/scripts/test-isolation.mjs
  * 退出码：0 全过；1 有断言失败
  */
+const fs = require('fs')
 const path = require('path')
 const Module = require('module')
 
-const COMMON = path.resolve(
-  __dirname,
-  '..',
-  '..',
-  'apps',
-  'user',
-  'uniCloud-aliyun',
+/**
+ * uniCloud 目录会随服务商改名（uniCloud-aliyun / uniCloud-alipay / ...），
+ * 这里自动探测，避免换云厂商后测试直接 MODULE_NOT_FOUND。
+ */
+function findUniCloudDir() {
+  const userApp = path.resolve(__dirname, '..', '..', 'apps', 'user')
+  const preferred = path.join(userApp, 'uniCloud-alipay')
+  if (fs.existsSync(preferred)) return preferred
+  const hit = fs.existsSync(userApp)
+    ? fs.readdirSync(userApp).find((name) => name.startsWith('uniCloud-'))
+    : null
+  if (!hit) throw new Error(`找不到 uniCloud 目录：${userApp}`)
+  return path.join(userApp, hit)
+}
+
+const COMMON = path.join(
+  findUniCloudDir(),
   'cloudfunctions',
   'common',
   'xyyx-common',
@@ -121,6 +132,8 @@ ok('标记 mine=true', accepted.mine === true)
 console.log('\n3. 骑手看「别人接的单」')
 const others = C.taskForRider({ ...task, status: 2, runner_id: 'u_other' }, 'u_rider')
 ok('别人接的单不给联系方式', others.contact === null)
+ok('别人接的单不给门牌详情', others.destination.detail === '')
+ok('别人接的单不给备注', others.remark === '')
 ok('mine=false', others.mine === false)
 
 console.log('\n4. 用户端视图')
@@ -132,6 +145,8 @@ ok('骑手对象不含真实姓名字段', !has(asPublisher.rider || {}, 'real_n
 
 const asVisitor = C.taskForUser(task, 'u_stranger')
 ok('陌生人不给联系方式', asVisitor.contact === null)
+ok('陌生人不给门牌详情', asVisitor.destination.detail === '')
+ok('陌生人不给备注', asVisitor.remark === '')
 ok('role=visitor', asVisitor.role === 'visitor')
 
 console.log('\n5. 金额换算')

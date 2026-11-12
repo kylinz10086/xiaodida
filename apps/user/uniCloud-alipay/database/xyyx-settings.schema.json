@@ -1,0 +1,40 @@
+{
+  "bsonType": "object",
+  "required": ["commissionRate", "refundFeeRate"],
+  "permission": { "read": false, "create": false, "update": false, "delete": false },
+  "description": "运行配置。只有 _id='app' 一条文档，后台「系统设置」页可改，改完立即生效（各云函数实例缓存 60 秒）。客户端只能通过 getProfile.settings 读到公开项。",
+  "properties": {
+    "_id": { "description": "固定为 app" },
+    "commissionRate": {
+      "bsonType": "double",
+      "minimum": 0,
+      "maximum": 0.5,
+      "description": "平台抽佣比例（0.05 = 5%），骑手收入 = 订单金额 × (1 - 该值)"
+    },
+    "refundFeeRate": {
+      "bsonType": "double",
+      "minimum": 0,
+      "maximum": 0.2,
+      "description": "退款时扣除的支付通道费率（0.006 = 0.6%），设为 0 表示全额退"
+    },
+    "autoConfirmHours": {
+      "bsonType": "int",
+      "minimum": 1,
+      "maximum": 168,
+      "description": "送达后自动确认的小时数（两段式模式下生效）"
+    },
+    "autoSettleOnDeliver": {
+      "bsonType": "bool",
+      "description": "骑手点「已送达」是否立刻完成并结算（true=送达即完成）"
+    },
+    "minOrderYuan": { "bsonType": "double", "description": "订单最低金额（元）" },
+    "maxOrderYuan": { "bsonType": "double", "description": "单笔订单上限（元）" },
+    "minWithdrawYuan": { "bsonType": "double", "description": "单笔提现下限（元）" },
+    "grabPerMinute": { "bsonType": "int", "description": "抢单频率限制（每分钟次数）" },
+    "abandonPerDay": { "bsonType": "int", "description": "放弃订单限制（每天次数）" },
+    "supportMobile": { "bsonType": "string", "maxLength": 20, "description": "客服电话（展示用）" },
+    "notice": { "bsonType": "string", "maxLength": 200, "description": "公告/下线提示，留空表示正常营业" },
+    "update_time": { "bsonType": "timestamp" },
+    "update_by": { "bsonType": "string", "description": "最后修改人 uid" }
+  }
+}

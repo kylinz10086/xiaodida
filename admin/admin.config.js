@@ -77,6 +77,32 @@ export default {
 				text: 'uni-admin 插件',
 				value: 'https://ext.dcloud.net.cn/?cat1=7&cat2=74'
 			}]
+		}, {
+			menu_id: "xyyx-admin",
+			text: '校递达管理',
+			icon: 'admin-icons-user',
+			url: "",
+			children: [{
+				menu_id: "xyyx-users",
+				icon: 'admin-icons-table',
+				text: '用户数据',
+				value: '/pages/xyyx/users/list'
+			}, {
+				menu_id: "xyyx-riders",
+				icon: 'admin-icons-icon',
+				text: '骑手审核',
+				value: '/pages/xyyx/riders/list'
+			}, {
+				menu_id: "xyyx-refunds",
+				icon: 'admin-icons-table',
+				text: '退款记录',
+				value: '/pages/xyyx/refunds/list'
+			}, {
+				menu_id: "xyyx-settings",
+				icon: 'admin-icons-gear',
+				text: '系统设置',
+				value: '/pages/xyyx/settings/settings'
+			}]
 		}]
 	},
 	uniStat: {

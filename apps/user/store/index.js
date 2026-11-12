@@ -1,5 +1,6 @@
 import Vue from 'vue'
 import Vuex from 'vuex'
+import { AGREEMENT_VERSION } from '@/common/agreement.js'
 
 Vue.use(Vuex)
 
@@ -17,7 +18,6 @@ import rider from './rider'
  */
 
 const SCHOOL = '浙江中医药大学'
-const AGREEMENT_VERSION = '1.0.0'
 
 let lifeData = {}
 try {
@@ -46,6 +46,25 @@ function payApi() {
   return uniCloud.importObject('xyyx-pay', { customUI: true })
 }
 
+/**
+ * 写接口防重放参数：每次写操作生成新的 nonce + 当前时间戳。
+ * 服务端 checkNonce 会把 uid+nonce 落到 xyyx-nonces（唯一索引），
+ * 5 分钟外或重复提交直接拒绝。
+ */
+let nonceSeq = 0
+function requestMeta() {
+  const seq = (++nonceSeq).toString(36)
+  const rand = Math.random().toString(36).slice(2, 12)
+  return {
+    nonce: `n_${Date.now().toString(36)}_${seq}_${rand}`,
+    timestamp: Date.now()
+  }
+}
+
+function withMeta(data = {}) {
+  return { ...data, ...requestMeta() }
+}
+
 const STATUS_TEXT = { 1: '待接单', 2: '进行中', 3: '已完成', 4: '已取消', 5: '售后中' }
 
 function formatTime(ts) {
@@ -68,7 +87,21 @@ function mapTask(t) {
     timeOption: t.time_option,
     timeText: formatTime(t.create_time),
     riderName: t.rider ? t.rider.nickname : '',
-    time: t.create_time
+    time: t.create_time,
+    // —— 钱：修改订单/退款相关 ——
+    paid: t.paid || 0,
+    due: t.due || 0,
+    refund: t.refund || 0,
+    refundStatus: t.refund_status || '',
+    refundStatusText: t.refund_status_text || '',
+    refundFailReason: t.refund_fail_reason || '',
+    // 退款手续费（平台留下），详情页要说明白
+    refundFee: t.refund_fee || 0,
+    payStatus: t.pay_status || '',
+    /** 还差差价没付 */
+    needPay: Number(t.due_cent || 0) > 0,
+    /** 有退款在途或已退 */
+    hasRefund: Number(t.refund_cent || 0) > 0
   }
 }
 
@@ -94,8 +127,20 @@ const store = new Vuex.Store({
     },
     getTaskList: (state) => state.hall,
     getMyTasks: (state) => state.myTasks,
+    /** 兼容老页面命名：搜索页用的是 getMyOrders，这里补个别名，别再返回 undefined */
+    getMyOrders: (state) => state.myTasks,
     getMyPublishedTasks: (state) => state.myTasks.filter((t) => t.role === 'publisher'),
     getDetail: (state) => state.detail,
+    /**
+     * 按 id 查订单。
+     * 详情页一直在用 `getTaskById`，但 store 里从来没定义过这个 getter，
+     * 结果详情页一进去就 TypeError（白屏），这里补上。
+     */
+    getTaskById: (state) => (id) => {
+      if (!id) return null
+      const all = [...state.myTasks, ...state.hall, ...(state.detail ? [state.detail] : [])]
+      return all.find((t) => t && (t._id === id || t.id === id)) || null
+    },
     getUserInfo: (state) => state.profile,
     getUserStats(state) {
       const p = state.profile
@@ -105,7 +150,7 @@ const store = new Vuex.Store({
         total_income: (p.wallet && p.wallet.income) || 0
       }
     },
-    commissionRate: (state) => state.profile.commission_rate || 0.1
+    commissionRate: (state) => state.profile.commission_rate || 0.05
   },
 
   mutations: {
@@ -144,10 +189,21 @@ const store = new Vuex.Store({
       uni.setStorageSync('token', token)
     },
 
+    /**
+     * 登录成功后把用户资料放进 Vuex。
+     * 之前 App.vue / 登录弹窗都会 dispatch 这个 action，但 store 里根本没定义，
+     * 导致登录请求明明成功了，回调却抛 "unknown action type: setUserData"。
+     */
+    async setUserData({ commit }, user) {
+      commit('$uStore', { name: 'vuex_user', value: user || {} })
+    },
+
     logout({ commit }) {
       commit('SET_PROFILE', {})
       commit('SET_MY_TASKS', [])
       commit('SET_HALL', [])
+      commit('$uStore', { name: 'vuex_user', value: {} })
+      commit('$uStore', { name: 'vuex_token', value: '' })
       uni.removeStorageSync('userInfo')
       uni.removeStorageSync('token')
       uni.removeStorageSync('uniIdToken')
@@ -163,10 +219,15 @@ const store = new Vuex.Store({
     },
 
     async updateProfile({ dispatch }, data) {
-      const res = await api().updateProfile(data)
+      const res = await api().updateProfile(withMeta(data))
       if (res.code !== 0) throw new Error(res.msg)
       await dispatch('fetchProfile')
       return res
+    },
+
+    /** 兼容旧页面命名：userinfo 页 dispatch 的是 updateUserInfo */
+    async updateUserInfo({ dispatch }, data) {
+      return dispatch('updateProfile', data)
     },
 
     /* ---------- 大厅 ---------- */
@@ -187,9 +248,82 @@ const store = new Vuex.Store({
 
     /* ---------- 下单与支付 ---------- */
     async publishTask(_, data) {
-      const res = await api().publishTask(data)
+      const res = await api().publishTask(withMeta(data))
       if (res.code !== 0) throw new Error(res.msg)
       return res.data
+    },
+
+    /**
+     * 修改订单（原地更新，不再是「取消旧的 + 重新下单」）。
+     *
+     * 服务端会算好差价：
+     *   - 降价：登记退款单 → 这里接着调 xyyx-pay.refundTask 把钱原路退回
+     *   - 涨价：返回 needPay=true，调用方再走 payOrder 补差价
+     */
+    async updateTask({ dispatch }, data) {
+      const res = await api().updateTask(withMeta(data))
+      if (res.code !== 0) throw new Error(res.msg)
+      const info = res.data || {}
+      // 服务端已经在同一次请求里提交了微信退款；只有它没退成功（状态还是 processing/failed）
+      // 才由客户端补一刀，再失败就交给定时任务
+      if (info.refundId && info.refundStatus !== 'success') {
+        await dispatch('submitRefund', info.refundId)
+      }
+      return { ...info, msg: res.msg }
+    },
+
+    /**
+     * 把服务端登记好的退款单真正提交给微信。
+     * 失败不抛错：服务端定时任务会重试，用户不该因为退款慢一点就看不到结果。
+     */
+    async submitRefund(_, refundId) {
+      if (!refundId) return null
+      try {
+        const r = await payApi().refundTask(refundId)
+        if (r.code !== 0) console.warn('[refund] 微信退款提交失败：', r.msg)
+        return r
+      } catch (e) {
+        console.warn('[refund] 微信退款提交异常：', e && e.message)
+        return null
+      }
+    },
+
+    /**
+     * 单独支付一笔订单（全款或涨价差价）。
+     * 金额由服务端决定，客户端只负责唤起支付。
+     */
+    async payOrder({ dispatch }, { taskId, cancelOnFail = false }) {
+      try {
+        const payData = await dispatch('createPayment', taskId)
+        if (payData.mode === 'wechat') {
+          await dispatch('payWithWechat', payData)
+        } else {
+          const ok = await new Promise((resolve) => {
+            uni.showModal({
+              title: payData.isTopup ? '补付差价' : '模拟支付',
+              content: payData.isTopup
+                ? `本次只需补付差价 ¥${payData.amount}。\n当前未配置微信商户证书，将模拟支付。`
+                : `当前未配置微信商户证书，将模拟支付 ¥${payData.amount}。\n确认后订单进入大厅。`,
+              confirmText: '确认支付',
+              cancelText: '取消',
+              success: (r) => resolve(!!r.confirm),
+              fail: () => resolve(false)
+            })
+          })
+          if (!ok) throw new Error('已取消支付')
+          await dispatch('mockPay', taskId)
+        }
+        return payData
+      } catch (e) {
+        if (cancelOnFail) {
+          try {
+            await dispatch('cancelTask', { taskId, reason: '支付未完成，自动取消' })
+          } catch (cancelErr) {
+            console.warn('支付失败后自动取消失败', cancelErr)
+          }
+        }
+        throw e
+      }
     },
 
     /**
@@ -198,12 +332,7 @@ const store = new Vuex.Store({
      */
     async publishAndPay({ dispatch }, data) {
       const created = await dispatch('publishTask', data)
-      const payData = await dispatch('createPayment', created.id)
-      if (payData.mode === 'wechat') {
-        await dispatch('payWithWechat', payData)
-      } else {
-        await dispatch('mockPay', created.id)
-      }
+      await dispatch('payOrder', { taskId: created.id, cancelOnFail: true })
       return created
     },
 
@@ -213,7 +342,7 @@ const store = new Vuex.Store({
      * 导致支付对象里所有 requireAuth 都判成「未登录」。
      */
     async createPayment({ commit }, taskId) {
-      const res = await payApi().createJsapiOrder({ taskId })
+      const res = await payApi().createJsapiOrder({ taskId, ...requestMeta() })
       if (res.code !== 0) throw new Error(res.msg)
       commit('SET_PAY_MODE', res.data.mode)
       return res.data
@@ -240,7 +369,7 @@ const store = new Vuex.Store({
 
     /** 开发环境模拟支付（服务端在配置了真实支付时会拒绝） */
     async mockPay(_, taskId) {
-      const res = await payApi().mockPaySuccess(taskId)
+      const res = await payApi().mockPaySuccess(taskId, requestMeta())
       if (res.code !== 0) throw new Error(res.msg)
       return res
     },
@@ -253,26 +382,56 @@ const store = new Vuex.Store({
       return res.data
     },
 
-    async cancelTask(_, { taskId, reason }) {
-      const res = await api().cancelTask(taskId, reason)
+    async cancelTask({ dispatch }, { taskId, reason }) {
+      const res = await api().cancelTask(taskId, reason, requestMeta())
+      if (res.code !== 0) throw new Error(res.msg)
+      // 服务端已经提交过微信退款；没成功才由客户端再推一次（失败由定时任务兜底）
+      if (res.data && res.data.refundId && res.data.refundStatus !== 'success') {
+        await dispatch('submitRefund', res.data.refundId)
+      }
+      return res
+    },
+
+    async cancelUnpaidTasks(_ctx) {
+      const res = await api().cancelUnpaidTasks(requestMeta())
       if (res.code !== 0) throw new Error(res.msg)
       return res
     },
 
     async confirmReceipt(_, taskId) {
-      const res = await api().confirmReceipt(taskId)
+      const res = await api().confirmReceipt(taskId, requestMeta())
       if (res.code !== 0) throw new Error(res.msg)
       return res
     },
 
     async submitReview(_, data) {
-      const res = await api().submitReview(data)
+      const res = await api().submitReview(withMeta(data))
       if (res.code !== 0) throw new Error(res.msg)
       return res
     },
 
+    /** 反馈 / 注销申请，都落到 xyyx-feedback */
+    async submitFeedback(_, data) {
+      const res = await api().submitFeedback(withMeta(data))
+      if (res.code !== 0) throw new Error(res.msg)
+      return res
+    },
+
+    /* ---------- 订单内聊天 ---------- */
+    async listChats() {
+      const res = await api().listChats()
+      if (res.code !== 0) throw new Error(res.msg)
+      return (res.data && res.data.list) || []
+    },
+
+    async chatUnread(_, taskId) {
+      const res = await api().chatUnread(taskId)
+      if (res.code !== 0) throw new Error(res.msg)
+      return (res.data && res.data.unread) || 0
+    },
+
     async acceptAgreement({ state }) {
-      const res = await api().acceptAgreement({ version: state.agreementVersion })
+      const res = await api().acceptAgreement({ version: state.agreementVersion, ...requestMeta() })
       if (res.code !== 0) throw new Error(res.msg)
       return res
     },

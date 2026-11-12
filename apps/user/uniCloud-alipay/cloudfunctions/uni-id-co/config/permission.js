@@ -63,6 +63,9 @@ module.exports = {
   getAccountInfo: {
     auth: true
   },
+  getUserInfo: {
+    auth: true
+  },
   unbindWeixin: {
     auth: true
   },

@@ -285,6 +285,41 @@
 			]
 		},
 		{
+			"root": "pages/xyyx",
+			"pages": [{
+					"path": "users/list",
+					"style": {
+						"navigationBarTitleText": "用户数据"
+					}
+				},
+				{
+					"path": "riders/list",
+					"style": {
+						"navigationBarTitleText": "骑手审核"
+					}
+				},
+				{
+					"path": "refunds/list",
+					"style": {
+						"navigationBarTitleText": "退款记录"
+					}
+				},
+				{
+					"path": "settings/settings",
+					"style": {
+						"navigationBarTitleText": "系统设置"
+					}
+				},
+				{
+					"path": "setup",
+					"style": {
+						"navigationBarTitleText": "初始化管理员",
+						"navigationStyle": "custom"
+					}
+				}
+			]
+		},
+		{
 			"root": "pages/uni-stat",
 			"pages": [{
 					"path": "page-res/page-res",

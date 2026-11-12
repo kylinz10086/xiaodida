@@ -6,14 +6,14 @@
 
 ## 一、一笔订单的钱怎么走
 
-以 10 元订单、抽佣 10% 为例：
+以 10 元订单、抽佣 5% 为例：
 
 | 时机 | 触发 | 流水（元） | 骑手钱包 | 平台 |
 | --- | --- | --- | --- | --- |
 | 用户支付 | `markPaid` | `escrow_in +10` | — | 托管 +10 |
 | 骑手接单 | `grabTask` | 无 | — | — |
-| 用户确认收货 | `settleTask` | `income +9`、`commission +1`、`escrow_out -10` | +9 | 托管 -10、佣金 +1 |
-| 骑手提现 | `requestWithdraw` | `withdraw -9` | 余额 -9、冻结 +9 | — |
+| 用户确认收货 | `settleTask` | `income +9.5`、`commission +0.5`、`escrow_out -10` | +9.5 | 托管 -10、佣金 +0.5 |
+| 骑手提现 | `requestWithdraw` | `withdraw -9.5` | 余额 -9.5、冻结 +9.5 | — |
 
 **接单不产生任何资金变动**，这是「外卖式托管」的关键：钱在平台手里，跑完才结算。
 
@@ -71,7 +71,7 @@ wallets.balance_cent === Σ transactions(amount_cent) where user_id = uid
 
 ## 五、抽佣
 
-- 比例写死在 `xyyx-common/index.js` 的 `COMMISSION_RATE`（当前 0.1）
+- 比例来自 `xyyx-settings`（后台可改，代码兜底 `DEFAULT_SETTINGS.commissionRate = 0.05`）
 - **客户端不可传**，服务端计算后写入 `commission_cent`
 - 改比例属于资金规则变更，需同步更新 `rule.md` 第 6 节并记录
 

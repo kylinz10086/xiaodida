@@ -7,9 +7,10 @@
 					<text class="hero-title">校递达</text>
 					<text class="hero-sub">校园快递 · 代取带餐 · 同校互助</text>
 				</view>
-				<view class="hero-badge" @click="goMine">
+				<!-- 已登录时只做登录态提示，不再和底部「我的」页签重复；未登录才引导登录 -->
+				<view class="hero-badge" :class="{ 'is-on': loggedIn }" @click="loggedIn ? goMine() : openLogin()">
 					<text class="badge-dot"></text>
-					<text>{{ isLoggedIn ? '已登录' : '未登录' }}</text>
+					<text>{{ loggedIn ? '已登录' : '微信登录' }}</text>
 				</view>
 			</view>
 			<view class="hero-school">
@@ -18,6 +19,7 @@
 			</view>
 		</view>
 
+		<!-- 未登录时由右上角「微信登录」进入；不再插一条会被卡片遮挡的横条 -->
 		<!-- 快捷发布 -->
 		<view class="quick-row">
 			<view class="quick-card" @tap="clickReleaseRequirments(1)">
@@ -93,15 +95,14 @@
 	import { mapGetters, mapActions } from 'vuex'
 	import MissionListItem from '../components/mission-list-item.vue'
 	import WechatLoginModal from '@/components/wechat-login-modal/wechat-login-modal.vue'
-	import { requireLogin, isLoggedIn } from '@/common/auth.js'
+	import { isLoggedIn } from '@/common/auth.js'
+	import { AGREEMENT_VERSION } from '@/common/agreement.js'
 
 	export default {
 		components: { MissionListItem, WechatLoginModal },
 		computed: {
 			...mapGetters(['getTaskList', 'school']),
-			isLoggedIn() {
-				return !!(uni.getStorageSync('uniIdToken') || uni.getStorageSync('token'))
-			},
+
 			orderList() {
 				let list = (this.getTaskList || []).map((task) => ({
 					id: task._id || task.id,
@@ -131,8 +132,8 @@
 			}
 		},
 		onShow() {
-			// 没登录先去登录，登录成功会自动回到这里
-			if (!requireLogin()) return
+			// 注意：这里不能用 computed + uni.getStorageSync（不响应式，登录后不刷新）
+			this.loggedIn = isLoggedIn()
 			this.checkAgreement()
 			this.loadTaskList()
 		},
@@ -143,16 +144,16 @@
 			...mapActions(['fetchTaskList', 'acceptAgreement']),
 
 			checkAgreement() {
-				if (uni.getStorageSync('agreed_version') === '1.0.0') return
+				if (uni.getStorageSync('agreed_version') === AGREEMENT_VERSION) return
 				uni.showModal({
-					title: '用户协议与隐私政策',
-					content: '为了向你提供校园跑腿服务，需要你同意《用户服务协议》和《隐私政策》。我们只收集手机号、位置、订单等必要信息。',
+					title: '先看两份协议',
+					content: '下单前需要你同意《用户服务协议》和《隐私政策》。平台只用手机号、位置和订单信息完成跑腿服务，不会拿去做别的事。',
 					confirmText: '同意并继续',
 					cancelText: '查看协议',
 					confirmColor: '#007AFF',
 					success: (res) => {
 						if (res.confirm) {
-							uni.setStorageSync('agreed_version', '1.0.0')
+							uni.setStorageSync('agreed_version', AGREEMENT_VERSION)
 							this.acceptAgreement().catch(() => {})
 						} else {
 							uni.navigateTo({ url: '/pages/xyyx/agreement/user-agreement' })
@@ -173,7 +174,7 @@
 			},
 
 			clickReleaseRequirments(num) {
-				if (!this.isLoggedIn) {
+				if (!this.loggedIn) {
 					this.showLoginModal = true
 					this.pendingAction = { type: 'release', num }
 					return
@@ -185,6 +186,7 @@
 
 			onLoginSuccess() {
 				this.showLoginModal = false
+				this.loggedIn = true
 				this.loadTaskList()
 				if (this.pendingAction && this.pendingAction.type === 'release') {
 					const num = this.pendingAction.num
@@ -195,6 +197,12 @@
 						})
 					}, 300)
 				}
+			},
+
+			openLogin() {
+				// 用小程序内的品牌登录弹窗，别跳 uni-id 的默认登录页
+				// （那个页面是灰底 + 一句「请选择登录方式」，和 App 风格完全两样）
+				this.showLoginModal = true
 			},
 
 			goToSearch() {
@@ -217,6 +225,7 @@
 		},
 		data() {
 			return {
+				loggedIn: false,
 				showLoginModal: false,
 				pendingAction: null,
 				sortType: 'time',
@@ -231,7 +240,7 @@
 	.page {
 		background-color: #F2F2F7;
 		min-height: 100vh;
-		padding-bottom: 40rpx;
+		padding-bottom: 160rpx;
 	}
 
 	/* 顶部品牌 */
@@ -274,8 +283,17 @@
 		width: 10rpx;
 		height: 10rpx;
 		border-radius: 50%;
-		background: #7DFFB0;
+		background: rgba(255, 255, 255, 0.7);
 		margin-right: 10rpx;
+	}
+
+	/* 已登录：绿点 + 实底，和「微信登录」区分开 */
+	.hero-badge.is-on {
+		background: rgba(255, 255, 255, 0.28);
+	}
+
+	.hero-badge.is-on .badge-dot {
+		background: #7DFFB0;
 	}
 
 	.hero-school {
@@ -301,7 +319,7 @@
 		display: flex;
 		gap: 20rpx;
 		padding: 0 24rpx;
-		margin-top: -36rpx;
+		margin-top: 24rpx;
 	}
 
 	.quick-card {

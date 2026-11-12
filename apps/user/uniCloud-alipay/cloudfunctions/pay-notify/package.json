@@ -1,0 +1,7 @@
+{
+  "name": "pay-notify",
+  "version": "1.0.0",
+  "description": "微信支付 V3 回调 HTTP 入口",
+  "main": "index.js",
+  "dependencies": {}
+}

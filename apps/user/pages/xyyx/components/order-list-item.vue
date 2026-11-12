@@ -20,6 +20,12 @@
 					<text class="tag role-tag" :class="item.orderType" v-if="item.orderType">
 						{{item.orderType === 'published' ? '我发布的' : '我接的单'}}
 					</text>
+					<!-- 退款/补差价是钱的事，必须显眼 -->
+					<text class="tag money-tag warn" v-if="item.needPay">待补差价 ¥{{item.due}}</text>
+					<text class="tag money-tag" :class="item.refundStatus === 'failed' ? 'bad' : 'ok'" :title="item.refundFailReason || ''"
+						v-if="item.refund && item.refund > 0">
+						{{item.refundStatusText || '已退款'}} ¥{{item.refund}}
+					</text>
 				</view>
 				<view class="route-info" v-if="item.origin && item.origin.name">
 					<view class="route-point">
@@ -43,6 +49,13 @@
 						<text class="publish-time">{{item.time}}</text>
 					</view>
 					<view class="action-btns">
+						<!-- 涨价改单后还差差价没付：付清才会进大厅 -->
+						<view 
+							class="action-btn warning" 
+							v-if="item.needPay"
+							@click.stop="payDifference(item)">
+							补差价 ¥{{item.due}}
+						</view>
 						<view 
 							class="action-btn primary" 
 							v-if="item.orderType === 'published' && item.state === 1"
@@ -86,8 +99,36 @@
 	export default {
 		name: 'OrderListItem',
 		props: ['listData'],
+		computed: {
+			/** 退款通道费率（服务端下发），用于取消前把金额说清楚 */
+			refundFeeRate() {
+				const r = this.$store && this.$store.state.profile && this.$store.state.profile.refund_fee_rate;
+				return typeof r === 'number' ? r : 0;
+			}
+		},
 		methods: {
-			...mapActions(['completeTask', 'confirmTask', 'cancelTask', 'abandonTask']),
+			...mapActions(['completeTask', 'confirmTask', 'cancelTask', 'abandonTask', 'payOrder']),
+			/** 涨价改单后补差价：只付差额，不会再收一遍全款 */
+			payDifference(item) {
+				uni.showModal({
+					title: '补付差价',
+					content: `本次只需补付 ¥${item.due}，付清后订单才会进入大厅。`,
+					confirmText: '去支付',
+					success: async (res) => {
+						if (!res.confirm) return;
+						uni.showLoading({ title: '支付中' });
+						try {
+							await this.payOrder({ taskId: item.id });
+							uni.hideLoading();
+							uni.showToast({ title: '补差价成功', icon: 'success' });
+							this.$emit('refresh');
+						} catch (e) {
+							uni.hideLoading();
+							uni.showToast({ title: e.message || '支付失败', icon: 'none' });
+						}
+					}
+				});
+			},
 			stateToText(num) {
 				const map = { 1: '待接单', 2: '进行中', 3: '已完成', 4: '已取消' };
 				return map[num] || '待接单';
@@ -147,13 +188,25 @@
 				});
 			},
 			cancelOrderTask(item) {
+				// 先把「实际能退多少」算给用户看：默认全额退，配置了费率才扣
+				const rate = this.refundFeeRate;
+				const cents = Math.round((Number(item.money) || 0) * 100);
+				const fee = Math.min(Math.round(cents * rate), Math.max(0, cents - 1));
+				const net = ((cents - fee) / 100).toFixed(2);
+				const pct = (rate * 100).toFixed(1).replace(/\.0$/, '');
+				const content = fee > 0
+					? `取消后 ¥${net} 将原路退回（已扣 ${pct}% 微信支付通道费 ¥${(fee / 100).toFixed(2)}）。`
+					: `取消后 ¥${net} 将全额原路退回微信。`;
 				uni.showModal({
 					title: '确认取消',
-					content: '确认取消该订单吗？取消后订单将从任务市场移除。',
+					content,
+					confirmText: '确认取消',
+					confirmColor: '#FF3B30',
 					success: (res) => {
 						if (res.confirm) {
-							this.cancelTask({ taskId: item.id, reason: '发布者取消' }).then(() => {
-								uni.showToast({ title: '订单已取消', icon: 'success', duration: 1500 });
+							this.cancelTask({ taskId: item.id, reason: '发布者取消' }).then((r) => {
+								// 用服务端的真实结论：已原路退回 / 已退回余额 / 退款处理中
+								uni.showToast({ title: (r && r.msg) || '订单已取消', icon: 'none', duration: 2500 });
 								this.$emit('refresh');
 							}).catch(err => {
 								uni.showToast({ title: err.message || '操作失败', icon: 'none' });
@@ -222,6 +275,13 @@
 	.order-tags { display: flex; flex-wrap: wrap; gap: 12rpx; margin-bottom: 16rpx; }
 	.tag { padding: 6rpx 16rpx; background-color: #F2F2F7; border-radius: 12rpx; font-size: 22rpx; color: #8E8E93; }
 	.role-tag { &.published { background-color: rgba(0, 122, 255, 0.1); color: #007AFF; } &.accepted { background-color: rgba(255, 149, 0, 0.1); color: #FF9500; } }
+	/* 钱相关的标签：待补差价 / 退款中 / 已退款 / 退款失败 */
+	.money-tag {
+		font-weight: 600;
+		&.warn { background-color: rgba(255, 149, 0, 0.12); color: #AD6800; }
+		&.ok { background-color: rgba(52, 199, 89, 0.12); color: #1A7F37; }
+		&.bad { background-color: rgba(255, 59, 48, 0.12); color: #C62828; }
+	}
 	.route-info { display: flex; align-items: center; padding: 16rpx; background-color: #F2F2F7; border-radius: 16rpx; }
 	.route-point { display: flex; align-items: center; flex: 1; }
 	.point-icon { width: 36rpx; height: 36rpx; line-height: 36rpx; text-align: center; border-radius: 18rpx; font-size: 20rpx; color: #fff; margin-right: 12rpx;

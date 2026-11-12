@@ -10,12 +10,25 @@
  *
  * 用法：node tools/scripts/test-settlement.cjs
  */
+const fs = require('fs')
 const path = require('path')
 const Module = require('module')
 
-const COMMON = path.resolve(
-  __dirname, '..', '..',
-  'apps', 'user', 'uniCloud-aliyun', 'cloudfunctions', 'common', 'xyyx-common', 'index.js'
+/** 自动探测 uniCloud-* 目录（阿里云/支付宝云会改名） */
+function findUniCloudDir() {
+  const userApp = path.resolve(__dirname, '..', '..', 'apps', 'user')
+  const preferred = path.join(userApp, 'uniCloud-alipay')
+  if (fs.existsSync(preferred)) return preferred
+  const hit = fs.existsSync(userApp)
+    ? fs.readdirSync(userApp).find((name) => name.startsWith('uniCloud-'))
+    : null
+  if (!hit) throw new Error(`找不到 uniCloud 目录：${userApp}`)
+  return path.join(userApp, hit)
+}
+
+const COMMON = path.join(
+  findUniCloudDir(),
+  'cloudfunctions', 'common', 'xyyx-common', 'index.js'
 )
 
 /* ============ 内存版 db ============ */
@@ -176,6 +189,7 @@ const t2 = seedTask({ status: C.STATUS.PENDING, runner_id: '' })
 const rr = await C.refundTask(t2, '用户取消')
 const after2 = table(C.COLL.tasks).find((x) => x._id === t2._id)
 ok('状态变成已取消(4)', after2.status === 4)
+ok('支付状态变成已退款', after2.pay_status === 'refunded', after2.pay_status)
 ok('记录退款金额 1000 分', after2.refund_cent === 1000)
 ok('记录取消原因', after2.cancel_reason === '用户取消')
 ok('返回值正确', rr.refund === 1000)

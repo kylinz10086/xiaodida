@@ -1,7 +1,7 @@
 {
     "name": "xiaodida-client",
-    "version": "0.9.1",
-    "description": "校递达 —— 校园快递代取 / 代带餐食互助小程序（uni-app + uniCloud）",
+    "version": "0.9.2",
+    "description": "校递达 —— 浙江中医药大学校园快递代取 / 代带餐食互助小程序（uni-app + uniCloud）",
     "main": "main.js",
     "scripts": {
         "lint": "echo \"(uni-app 工程，编译请用 HBuilderX：运行 → 运行到小程序模拟器 → 微信开发者工具)\"",
@@ -10,15 +10,15 @@
     "repository": {
         "type": "git",
         "url": "git+https://github.com/kylinz10086/xiaodida.git",
-        "directory": "校递达app客户端"
+        "directory": "apps/user"
     },
     "keywords": [
         "uni-app",
         "uniCloud",
         "校园",
         "跑腿",
-        "快递",
-        "带餐",
+        "快递代取",
+        "代带餐食",
         "小程序"
     ],
     "author": "",
@@ -29,14 +29,6 @@
     "homepage": "https://github.com/kylinz10086/xiaodida#readme",
     "dependencies": {
         "deep-clone": "^3.0.3",
-        "moment": "^2.29.1",
-        "vue-i18n": "^8.20.0"
-    },
-    "id": "lin2077-xyyx",
-    "dcloudext": {
-        "category": [
-            "uni-app前端模板",
-            "uni-app前端项目模板"
-        ]
+        "moment": "^2.29.1"
     }
 }

@@ -7,15 +7,15 @@
 
 ## 一、这个项目是什么
 
-浙江中医药大学的校园跑腿平台，拆成**两个小程序**：
+浙江中医药大学的校园跑腿平台，**一个小程序、两种身份**：
 
-| 端 | 目录 | 谁用 | 能干什么 |
+| 身份 | 入口 | 谁用 | 能干什么 |
 | --- | --- | --- | --- |
-| 用户端 | `apps/user` | 下单的同学 | 发需求、支付、看进度、确认收货、评价 |
-| 骑手端 | `apps/rider` | 跑腿的同学 | 抢单、取件、送达、看收入、提现 |
-| 后台 | `admin` | 平台运营 | uni-admin 模板（业务页还没做） |
+| 用户 | 首页 / 我的 | 下单的同学 | 发需求、支付、看进度、确认收货、和骑手聊天、评价 |
+| 骑手 | 首页「我是骑手」/ 我的-骑手中心 | 跑腿的同学 | 抢单、取件、送达、和用户聊天、看收入、提现 |
+| 后台 | `admin` | 平台运营 | 用户数据、骑手审核、系统设置 |
 
-资金走**预付托管**：用户下单先付钱到平台 → 骑手接单送达 → 用户确认（或 24 小时自动确认）→ 平台抽佣 10% 后结算给骑手。
+资金走**预付托管**：用户下单先付钱到平台 → 骑手接单送达 → 平台收 5% 服务费后结算给骑手。
 
 ---
 
@@ -25,22 +25,27 @@
 xiaodida/
 ├── rule.md                 项目规则（先读）
 ├── README.md
+├── 测试目录.md              验收清单
 ├── docs/                   设计、使用、安全、资金文档
 ├── apps/
-│   ├── user/               用户端（uni-app，含唯一的后端源码）
-│   │   └── uniCloud-aliyun/
-│   │       ├── cloudfunctions/
-│   │       │   ├── common/xyyx-common/   鉴权·字段裁剪·记账
-│   │       │   ├── xyyx-user/            用户端云对象
-│   │       │   ├── xyyx-rider/           骑手端云对象
-│   │       │   └── xyyx-pay/             微信支付 / mock
-│   │       └── database/                 8 张表 schema + 索引
-│   └── rider/              骑手端（uni-app，无 uView）
+│   └── user/               唯一的小程序工程（用户 + 骑手 + 聊天，含后端源码）
+│       ├── pages/xyyx/     用户端页面
+│       ├── pages/rider/    骑手端页面
+│       ├── pages/chat/     订单聊天
+│       └── uniCloud-alipay/
+│           ├── cloudfunctions/
+│           │   ├── common/xyyx-common/   鉴权·字段裁剪·记账·聊天
+│           │   ├── xyyx-user/            用户端云对象
+│           │   ├── xyyx-rider/           骑手端云对象
+│           │   ├── xyyx-pay/             微信支付 / mock
+│           │   ├── xyyx-admin/           管理后台云对象
+│           │   └── xyyx-cron/            定时任务
+│           └── database/                 10 张表 schema + 索引
 ├── admin/                  后台（uni-admin）
+├── tests/                  回归测试
 ├── tools/
 │   ├── wx-mcp/             自研微信小程序开发插件
-│   └── scripts/            密钥扫描、模板清洗、地图 key 抽取
-├── miniprogram/            原生小程序离线演示版（历史产物）
+│   └── scripts/            密钥扫描、部署、测试、图片压缩
 └── reference/              uni-id 登录模板（参考，不部署）
 ```
 
@@ -67,16 +72,15 @@ xiaodida/
 & "F:\HBuilderX.5.05.2026032417\HBuilderX\cli.exe" launch mp-weixin --project "F:\xiaodida\apps\user" --compile true
 ```
 
-### 3.3 骑手端
+### 3.3 骑手身份
 
-```powershell
-& "F:\HBuilderX.5.05.2026032417\HBuilderX\cli.exe" project open --path "F:\xiaodida\apps\rider"
-& "F:\HBuilderX.5.05.2026032417\HBuilderX\cli.exe" launch mp-weixin --project "F:\xiaodida\apps\rider" --compile true
-```
+不用单独编译。打开同一个小程序：
 
-> ⚠️ 骑手端现在和用户端用同一个小程序 appid（`wxab71ca588522f56d`），
-> 同时只能跑一个。正式上线要**再申请一个小程序 appid**，填到
-> `apps/rider/manifest.json` 的 `mp-weixin.appid`。
+1. 首页底部「我是骑手」，或「我的 → 骑手中心」；
+2. 首次进入按提示提交真实姓名 + 15 位学号 + 手机号，等审核；
+3. 通过后进「骑手工作台」，在抢单大厅接单。
+
+> 只有一个工程、一个小程序 appid（`wxab71ca588522f56d`）：用户和骑手在同一个 App 里切换身份。
 
 ---
 
@@ -110,16 +114,16 @@ xiaodida/
 **手工方式**：
 
 ```powershell
-copy "apps\user\uniCloud-aliyun\cloudfunctions\common\uni-config-center\uni-id\config.example.json" `
-     "apps\user\uniCloud-aliyun\cloudfunctions\common\uni-config-center\uni-id\config.json"
+copy "apps\user\uniCloud-alipay\cloudfunctions\common\uni-config-center\uni-id\config.example.json" `
+     "apps\user\uniCloud-alipay\cloudfunctions\common\uni-config-center\uni-id\config.json"
 # 然后把 <PASSWORD_PEPPER> / <TOKEN_SECRET> / <REQUEST_AUTH_SECRET> / <WX_APP_SECRET> 换成真实值
 ```
 
 **支付配置**（可选，不配就是模拟支付）：
 
 ```powershell
-copy "apps\user\uniCloud-aliyun\cloudfunctions\xyyx-pay\pay-config.example.js" `
-     "apps\user\uniCloud-aliyun\cloudfunctions\xyyx-pay\pay-config.js"
+copy "apps\user\uniCloud-alipay\cloudfunctions\xyyx-pay\pay-config.example.js" `
+     "apps\user\uniCloud-alipay\cloudfunctions\xyyx-pay\pay-config.js"
 ```
 
 这两个 `config.json` / `pay-config.js` 都已写进 `.gitignore`，**不要提交**。
@@ -134,8 +138,8 @@ node tools/scripts/check-secrets.mjs
 
 在 HBuilderX 里：
 
-1. 右键 `uniCloud-aliyun/database` → **上传所有 DB Schema**
-2. 右键 `uniCloud-aliyun/database/db_init.json` → **初始化云数据库**（会建集合）
+1. 右键 `uniCloud-alipay/database` → **上传所有 DB Schema**
+2. 右键 `uniCloud-alipay/database/db_init.json` → **初始化云数据库**（会建集合）
 3. 右键 `cloudfunctions/common/xyyx-common` → **上传公共模块**
 4. 右键 `cloudfunctions/xyyx-user` → **上传部署**
 5. 右键 `cloudfunctions/xyyx-rider` → **上传部署**
@@ -179,10 +183,10 @@ uniCloud 控制台把对应用户的 `rider_status` 改成 `2`，或者临时用
                       │
               骑手接单（不结算）
                       │
-            送达 + 用户确认（或 24h 自动确认）
+            送达（送达即结算，或用户确认后结算）
                       │
       ┌───────────────┴───────────────┐
-   骑手收入(income, 90%)        平台佣金(commission, 10%)
+   骑手收入(income, 95%)        平台服务费(commission, 5%)
 ```
 
 - 金额全部用**整数分**存储（`*_cent`），前端只显示元。

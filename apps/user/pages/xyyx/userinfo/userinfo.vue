@@ -1,6 +1,6 @@
 <template>
 	<view class="page-container">
-		<view class="user-header" :class="{'logged-in': isLoggedIn}">
+		<view class="user-header" :class="{'logged-in': loggedIn}">
 			<view class="header-bg"></view>
 			<view class="header-content">
 				<view class="user-info" @click="handleUserClick">
@@ -9,20 +9,31 @@
 						<view class="avatar-border"></view>
 					</view>
 					<view class="user-text">
-						<text class="nickname">{{ isLoggedIn ? (userInfo.nickname || '微信用户') : '点击登录' }}</text>
-						<text class="user-id" v-if="isLoggedIn && userInfo.mobile">{{ maskMobile(userInfo.mobile) }}</text>
-						<text class="user-id" v-else-if="!isLoggedIn">登录后享受更多服务</text>
+						<text class="nickname">{{ loggedIn ? (userInfo.nickname || '微信用户') : '点击登录' }}</text>
+						<text class="user-id" v-if="loggedIn && userInfo.mobile">{{ maskMobile(userInfo.mobile) }}</text>
+						<text class="user-id" v-else-if="!loggedIn">登录后享受更多服务</text>
 					</view>
 				</view>
-				<view class="header-actions" v-if="isLoggedIn">
+				<view class="header-actions" v-if="loggedIn">
 					<view class="action-item" @click="goToNotification">
-						<image class="action-icon" src="/static/icon/notification.png" mode="aspectFit"></image>
+						<text class="action-text">通知</text>
 					</view>
 				</view>
 			</view>
 		</view>
+
+		<view class="profile-helper" v-if="showProfileHelper" @click="editField('nickname')">
+			<view class="helper-main">
+				<text class="helper-title">把资料补一下</text>
+				<text class="helper-desc">设置头像和昵称，骑手和同学更容易认出你。</text>
+			</view>
+			<view class="helper-actions">
+				<text class="helper-btn" @click.stop="editField('nickname')">昵称</text>
+				<text class="helper-btn" @click.stop="chooseAvatar">头像</text>
+			</view>
+		</view>
 		
-		<view class="stats-section" v-if="isLoggedIn">
+		<view class="stats-section" :class="{'with-helper': showProfileHelper}" v-if="loggedIn">
 			<view class="stats-card">
 				<view class="stat-item">
 					<text class="stat-num">{{ userStats.published_count || 0 }}</text>
@@ -35,13 +46,13 @@
 				</view>
 				<view class="stat-divider"></view>
 				<view class="stat-item">
-					<text class="stat-num">{{ userStats.total_income || 0 }}</text>
+					<text class="stat-num">{{ money(userStats.total_income || 0) }}</text>
 					<text class="stat-label">收入(元)</text>
 				</view>
 			</view>
 		</view>
 		
-		<view class="order-entry-section" v-if="isLoggedIn">
+		<view class="order-entry-section" v-if="loggedIn">
 			<view class="order-entry-card" @click="goToMyOrders('published')">
 				<view class="entry-icon-wrap published">
 					<text class="entry-icon-text">发</text>
@@ -64,7 +75,7 @@
 			</view>
 		</view>
 
-		<view class="menu-section" v-if="isLoggedIn">
+		<view class="menu-section" v-if="loggedIn">
 			<view class="menu-item" @click="editField('nickname')">
 				<text class="menu-label">用户名</text>
 				<view class="menu-right">
@@ -84,38 +95,43 @@
 		<!-- 骑手中心：一个 App 两种身份，切过去就能接单 -->
 		<view class="menu-section">
 			<view class="menu-item" @click="goRiderCenter">
-				<text class="menu-label">🛵 骑手中心</text>
+				<text class="menu-label">骑手中心</text>
 				<view class="menu-right">
 					<text class="menu-value">{{ riderStatusText }}</text>
 					<text class="arrow">›</text>
 				</view>
 			</view>
-		</view>
-		
-		<view class="menu-section">
-			<view class="menu-item" @click="goToPage('privacy')">
-				<text class="menu-label">隐私政策</text>
+			<view class="menu-item" @click="goChats">
+				<text class="menu-label">消息</text>
 				<view class="menu-right">
+					<text class="menu-value" v-if="chatUnread > 0">{{ chatUnread > 99 ? '99+' : chatUnread }} 条未读</text>
 					<text class="arrow">›</text>
 				</view>
 			</view>
-			<view class="menu-item" @click="goToPage('runner')">
-				<text class="menu-label">跑腿服务协议</text>
+			<view class="menu-item" @click="goFeedback">
+				<text class="menu-label">意见反馈</text>
 				<view class="menu-right">
-					<text class="arrow">›</text>
-				</view>
-			</view>
-			<view class="menu-item" @click="goToPage('user')">
-				<text class="menu-label">用户服务协议</text>
-				<view class="menu-right">
+					<text class="menu-value">问题、投诉与建议</text>
 					<text class="arrow">›</text>
 				</view>
 			</view>
 		</view>
 		
-		<view class="menu-section" v-if="isLoggedIn">
+		<view class="menu-section" v-if="loggedIn">
 			<view class="menu-item logout-btn" @click="handleLogout">
 				<text class="menu-label">退出登录</text>
+			</view>
+		</view>
+
+		<!-- 底部：协议、反馈、注销；微信审核要求注销入口必须找得到 -->
+		<view class="legal-footer">
+			<view class="legal-link" @click="goToPage('legal')">
+				<text class="legal-link-text">法律条款与平台规则</text>
+				<text class="legal-link-arrow">›</text>
+			</view>
+			<view class="legal-link" @click="goDeleteAccount">
+				<text class="legal-link-text">注销账号</text>
+				<text class="legal-link-arrow">›</text>
 			</view>
 		</view>
 		
@@ -170,6 +186,7 @@
 <script>
 import { mapActions, mapGetters } from 'vuex'
 import WechatLoginModal from '@/components/wechat-login-modal/wechat-login-modal.vue'
+import { fmtMoney } from '@/common/rider-util.js'
 
 export default {
 	components: {
@@ -177,6 +194,7 @@ export default {
 	},
 	data() {
 		return {
+				loggedIn: false,
 			showLoginModal: false,
 			showEditModal: false,
 			editingField: null,
@@ -184,6 +202,7 @@ export default {
 			inputFocused: false,
 			validationError: '',
 			saving: false,
+			chatUnread: 0,
 			defaultAvatar: '/static/icon/head1.png',
 			userInfo: {
 				avatar: '',
@@ -208,10 +227,15 @@ export default {
 				balance: 0
 			}
 		},
-		isLoggedIn() {
-			const token = uni.getStorageSync('uniIdToken') || uni.getStorageSync('token')
-			return !!token
+
+		/** 微信新版拿不到真实昵称/头像时，才显示手动完善提示 */
+		showProfileHelper() {
+			if (!this.loggedIn) return false
+			const nickname = this.userInfo.nickname || ''
+			const avatar = this.userInfo.avatar || ''
+			return nickname === '微信用户' || !avatar || avatar.indexOf('head1') >= 0
 		},
+
 		canConfirm() {
 			if (!this.editingValue.trim()) return false
 			if (this.editingField && this.editingField.key === 'mobile') {
@@ -224,16 +248,54 @@ export default {
 		}
 	},
 	onShow() {
-		this.loadUserInfo()
+		// 用 data 而不是 computed：uni.getStorageSync 不是响应式的，
+		// 放 computed 里会导致「登录成功后仍然显示未登录」。
+		this.loggedIn = !!(uni.getStorageSync('uniIdToken') || uni.getStorageSync('token'))
+		if (this.loggedIn) {
+			this.loadUserInfo()
+			this.loadChatUnread()
+		}
 	},
 	methods: {
 		...mapActions(['fetchUserInfo', 'updateUserInfo']),
+		money(v) {
+			return fmtMoney(v)
+		},
 		/** 进入骑手中心（同一 App 的另一重身份） */
 		goRiderCenter() {
 			uni.navigateTo({ url: '/pages/rider/center' })
 		},
+		goFeedback() {
+			if (!this.loggedIn) {
+				this.showLoginModal = true
+				return
+			}
+			uni.navigateTo({ url: '/pages/xyyx/feedback/feedback' })
+		},
+		goChats() {
+			if (!this.loggedIn) {
+				this.showLoginModal = true
+				return
+			}
+			uni.navigateTo({ url: '/pages/chat/list?role=user' })
+		},
+		async loadChatUnread() {
+			try {
+				const list = await this.$store.dispatch('listChats')
+				this.chatUnread = (list || []).reduce((sum, c) => sum + (Number(c.unread) || 0), 0)
+			} catch (e) {
+				this.chatUnread = 0
+			}
+		},
+		goDeleteAccount() {
+			if (!this.loggedIn) {
+				this.showLoginModal = true
+				return
+			}
+			uni.navigateTo({ url: '/pages/xyyx/feedback/feedback?type=delete_account' })
+		},
 		async loadUserInfo() {
-			if (!this.isLoggedIn) return
+			if (!this.loggedIn) return
 			
 			try {
 				const data = await this.fetchUserInfo()
@@ -241,7 +303,9 @@ export default {
 					this.userInfo = {
 						avatar: data.avatar || '',
 						nickname: data.nickname || data.name || '',
-						mobile: data.mobile || ''
+						mobile: data.mobile || '',
+						// 模板里的 riderStatusText 依赖这个字段，之前被丢掉了
+						rider_status: data.rider_status || 0
 					}
 					uni.setStorageSync('userInfo', this.userInfo)
 				}
@@ -252,13 +316,14 @@ export default {
 					this.userInfo = {
 						avatar: stored.avatar || '',
 						nickname: stored.nickname || '',
-						mobile: stored.mobile || ''
+						mobile: stored.mobile || '',
+						rider_status: stored.rider_status || 0
 					}
 				}
 			}
 		},
 		handleUserClick() {
-			if (!this.isLoggedIn) {
+			if (!this.loggedIn) {
 				this.showLoginModal = true
 			} else {
 				this.chooseAvatar()
@@ -266,6 +331,7 @@ export default {
 		},
 		onLoginSuccess() {
 			this.showLoginModal = false
+			this.loggedIn = true
 			this.loadUserInfo()
 		},
 		maskMobile(mobile) {
@@ -301,13 +367,25 @@ export default {
 				sourceType: ['album', 'camera'],
 				success: async (res) => {
 					const tempFilePath = res.tempFilePaths[0]
+					const old = this.userInfo.avatar
 					this.userInfo.avatar = tempFilePath
 					try {
-						await this.updateUserInfo({ avatar: tempFilePath })
+						// 本地临时路径只在当前设备有效，必须传到云存储再保存 fileID，
+						// 否则骑手端/管理后台看到的是 wxfile:// 开头的失效地址。
+						const ext = (tempFilePath.match(/\.(\w+)$/) || [])[1] || 'jpg'
+						const up = await uniCloud.uploadFile({
+							filePath: tempFilePath,
+							cloudPath: `xyyx-avatars/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+						})
+						const fileID = up.fileID
+						if (!fileID) throw new Error('上传失败')
+						await this.updateUserInfo({ avatar: fileID })
+						this.userInfo.avatar = fileID
 						uni.setStorageSync('userInfo', this.userInfo)
 						uni.showToast({ title: '头像已更新', icon: 'success' })
 					} catch (e) {
-						uni.showToast({ title: '更新失败', icon: 'none' })
+						this.userInfo.avatar = old
+						uni.showToast({ title: (e && e.message) || '头像更新失败', icon: 'none' })
 					}
 				}
 			})
@@ -375,7 +453,15 @@ export default {
 			})
 		},
 		goToPage(type) {
-			uni.showToast({ title: '功能开发中', icon: 'none' })
+			const map = {
+				legal: '/pages/xyyx/agreement/legal-terms',
+				algorithm: '/pages/xyyx/agreement/algorithm',
+				privacy: '/pages/xyyx/agreement/privacy-policy',
+				runner: '/pages/xyyx/agreement/runner-agreement',
+				user: '/pages/xyyx/agreement/user-agreement'
+			}
+			const url = map[type] || '/pages/xyyx/agreement/legal-terms'
+			uni.navigateTo({ url })
 		},
 		goToMyOrders(type) {
 			uni.setStorageSync('myOrdersFilter', type === 'published' ? 'publisher' : 'runner');
@@ -388,7 +474,9 @@ export default {
 				success: (res) => {
 					if (res.confirm) {
 						this.$store.dispatch('logout')
-						this.userInfo = { avatar: '', nickname: '', mobile: '' }
+						this.loggedIn = false
+						this.showLoginModal = false
+						this.userInfo = { avatar: '', nickname: '', mobile: '', rider_status: 0 }
 						uni.showToast({ title: '已退出登录', icon: 'success' })
 					}
 				}
@@ -399,10 +487,48 @@ export default {
 </script>
 
 <style lang="scss" scoped>
+.profile-helper {
+	margin: 20rpx 24rpx 0;
+	padding: 22rpx 24rpx;
+	background: #fff;
+	border-radius: 16rpx;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+}
+.helper-main { flex: 1; min-width: 0; }
+.helper-title {
+	display: block;
+	font-size: 26rpx;
+	font-weight: 600;
+	color: #1C1C1E;
+}
+.helper-desc {
+	display: block;
+	margin-top: 6rpx;
+	font-size: 22rpx;
+	color: #8E8E93;
+	line-height: 1.5;
+}
+.helper-actions {
+	display: flex;
+	gap: 16rpx;
+	margin-left: 16rpx;
+	flex-shrink: 0;
+}
+.helper-btn {
+	font-size: 23rpx;
+	color: #007AFF;
+	font-weight: 600;
+	padding: 8rpx 18rpx;
+	background: rgba(0, 122, 255, 0.08);
+	border-radius: 20rpx;
+}
+
 .page-container {
 	background-color: #F5F5F5;
 	min-height: 100vh;
-	padding-bottom: 40rpx;
+	padding-bottom: 180rpx;
 }
 
 .user-header {
@@ -416,7 +542,8 @@ export default {
 		left: 0;
 		right: 0;
 		height: 100%;
-		background: linear-gradient(135deg, #4A90E2 0%, #357ABD 50%, #2E6BB0 100%);
+		/* 和首页、登录弹窗统一成同一套品牌蓝 */
+		background: linear-gradient(160deg, #007AFF 0%, #3AA0FF 100%);
 		border-radius: 0 0 40rpx 40rpx;
 	}
 
@@ -475,17 +602,17 @@ export default {
 
 	.header-actions {
 		.action-item {
-			width: 72rpx;
-			height: 72rpx;
+			height: 60rpx;
+			padding: 0 22rpx;
 			background-color: rgba(255, 255, 255, 0.2);
-			border-radius: 50%;
+			border-radius: 30rpx;
 			display: flex;
 			align-items: center;
 			justify-content: center;
 
-			.action-icon {
-				width: 40rpx;
-				height: 40rpx;
+			.action-text {
+				font-size: 23rpx;
+				color: #fff;
 			}
 		}
 	}
@@ -497,6 +624,11 @@ export default {
 	margin-bottom: 20rpx;
 	position: relative;
 	z-index: 10;
+
+	/* 有「完善资料」提示卡时不要再上移，否则会盖住提示按钮 */
+	&.with-helper {
+		margin-top: 20rpx;
+	}
 
 	.stats-card {
 		background-color: #fff;
@@ -648,6 +780,33 @@ export default {
 		font-size: 32rpx;
 		color: #C7C7CC;
 	}
+}
+
+/* 法律条款入口：居中灰字，和微信原生的「更多资料」页一致 */
+.legal-footer {
+	padding: 16rpx 0 8rpx;
+}
+
+.legal-link {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 14rpx 0;
+
+	&:active {
+		opacity: 0.6;
+	}
+}
+
+.legal-link-text {
+	font-size: 26rpx;
+	color: #8E8E93;
+}
+
+.legal-link-arrow {
+	margin-left: 6rpx;
+	font-size: 26rpx;
+	color: #B0B0B5;
 }
 
 .logout-btn {

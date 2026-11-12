@@ -17,6 +17,9 @@ logs/
 *.tmp
 *.bak
 
+# 图片压缩前的原图备份（体积大，不入库）
+.asset-originals/
+
 # ⚠️ 敏感凭据：微信支付商户号 / API 密钥，禁止入库
 微信支付信息.txt
 支付信息.txt
@@ -43,6 +46,9 @@ apps/user/common/map-key.js
 Thumbs.db
 desktop.ini
 .idea/
+.vscode/
+.hbuilderx/
+.trae/
 *.swp
 
 # 微信支付真实配置（模板见 pay-config.example.js）

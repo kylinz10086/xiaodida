@@ -3,6 +3,8 @@
 > 所有接口返回 `{ code, msg, data }`，`code=0` 成功。
 > 客户端用 `uniCloud.importObject('<对象名>', { customUI: true })` 调用。
 > **用户端只能调 `xyyx-user`，骑手端只能调 `xyyx-rider`**，调错会被角色校验拒绝。
+> **所有写接口**还必须带 `nonce` + `timestamp`（客户端 store 自动生成）：缺失返回 400，
+> 同一 nonce 重复提交返回 409，超过 5 分钟返回 400。读接口不需要。
 
 ---
 
@@ -18,8 +20,12 @@
 | `getTaskDetail(taskId)` | `taskId` | 订单详情（字段裁剪后） |
 | `listMyTasks(params)` | `{role?:'publisher'|'runner'|'all', status?}` | 我的订单 |
 | `cancelTask(taskId, reason)` | | 未接单可取消，自动退款 |
-| `confirmReceipt(taskId)` | | 确认收货 → 触发结算 |
+| `confirmReceipt(taskId)` | | 确认收货 → 触发结算；要求骑手已 `markDelivered`（有 `delivered_time`） |
 | `submitReview(data)` | `{taskId, score(1-5), content}` | 评价骑手 |
+| `listChats()` | — | 会话列表（最近聊过的订单 + 未读数） |
+| `getChat(taskId, opts)` | `{after?}` | 拉消息；`after` 为增量轮询，打开即把对方消息标已读 |
+| `sendChat(taskId, content, meta, type)` | `type='text'\|'image'` | 发消息；仅订单双方可发，限流 30 条/分钟 |
+| `chatUnread(taskId)` | — | 单笔订单未读数（详情页小红点） |
 | `acceptAgreement(data)` | `{version}` | 协议同意留痕 |
 
 ### publishTask 的 data
@@ -64,6 +70,10 @@
 | `listMyJobs(params)` | `{status?}` | 我的任务 |
 | `getWallet()` | — | 余额 + 最近 50 条流水 |
 | `requestWithdraw(data)` | `{amount}` | 提现申请（人工审核），最低 10 元 |
+| `listChats()` | — | 骑手侧会话列表 |
+| `getChat(taskId, opts)` | `{after?}` | 拉消息（只允许该单骑手本人） |
+| `sendChat(taskId, content, meta, type)` | `type='text'\|'image'` | 发消息 |
+| `chatUnread(taskId)` | — | 单笔订单未读数 |
 | `acceptAgreement(data)` | `{version}` | 协议留痕 |
 
 ---
@@ -99,6 +109,19 @@
 
 | 接口 | 使用视图 | 效果 |
 | --- | --- | --- |
-| `xyyx-user.*` | `taskForUser()` | 骑手只给昵称/头像/评分；发布者能看到自己填的联系方式 |
-| `xyyx-rider.listHall / getTaskDetail` | `taskForRider()` | 未接单时 `contact=null`、`destination.detail=''`；接单后 `contact.mobile_masked` |
-| `xyyx-rider.listMyJobs` | `taskForRider()` | 自己的单才给脱敏号 |
+| `xyyx-user.*` | `taskForUser()` | 骑手只给昵称/头像/评分；发布者/接单者能看到门牌与联系方式，游客只看地点名 |
+| `xyyx-rider.listHall / getTaskDetail` | `taskForRider()` | 未接单时 `contact=null`、`destination.detail=''`；只有**接单者本人**接单后才有完整手机号和门牌 |
+| `xyyx-rider.listMyJobs` | `taskForRider()` | 自己的单才给完整手机号 |
+
+---
+
+## 六、订单内聊天
+
+- 集合：`xyyx-messages`，字段 `{task_id, from_id, to_id, content, type, read_at, create_time}`。
+- 权限：`permission:false`，客户端不直连；所有读写经过 `xyyx-user` / `xyyx-rider`。
+- 成员校验：`task.publisher_id` 或 `task.runner_id` 等于当前 uid 才放行；没接单前骑手不是成员，发不出去。
+- 系统消息：抢单、送达、放弃时自动插一条 `type='system'`，聊天里居中显示，用于交代上下文。
+- 已读：`getChat` 会把 `to_id=当前用户` 且 `read_at=0` 的消息置为已读；未读数用 `chatUnread` 单独查。
+- 轮询：客户端 4 秒一次 `getChat({after: 最后一条时间})`，没有 websocket，也不需要长连接。
+- 文件：图片走 `uniCloud.uploadFile` 传到云存储，消息体里存 `fileID`，类型 `image`。
+

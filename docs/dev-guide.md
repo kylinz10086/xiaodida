@@ -7,8 +7,8 @@
 
 ## 一、一句话定位
 
-浙江中医药大学的校园跑腿平台。两个小程序端（用户端 / 骑手端）+ uniCloud 后端（**支付宝云**）。
-资金走「预付托管」：下单付款进托管 → 骑手接单 → 送达 → 用户确认（或 24h 超时）→ 平台抽佣 10% 后结算。
+浙江中医药大学的校园跑腿平台。**一个小程序**（用户 / 骑手两种身份）+ uniCloud 后端（**支付宝云**）。
+资金走「预付托管」：下单付款进托管 → 骑手接单 → 送达 → 结算（平台服务费 5%）。
 
 ---
 
@@ -18,24 +18,28 @@
 xiaodida/
 ├── rule.md                    红线（必须先读）
 ├── README.md
+├── 测试目录.md                 验收清单
 ├── docs/                      使用/安全/接口/数据/资金/架构/本文件
 ├── apps/
-│   ├── user/                  用户端（uni-app + uView）
-│   │   └── uniCloud-alipay/   ★ 后端唯一源码（支付宝云）
-│   │       ├── cloudfunctions/
-│   │       │   ├── common/xyyx-common/   鉴权·字段裁剪·记账
-│   │       │   ├── xyyx-user/            用户端云对象
-│   │       │   ├── xyyx-rider/           骑手端云对象
-│   │       │   ├── xyyx-pay/             微信支付 V3 / mock
-│   │       │   └── xyyx-cron/            定时任务（自动确认 + 清理 nonce）
-│   │       └── database/                 8 张表 schema + 索引
-│   └── rider/                 骑手端（uni-app，无 uView）
+│   └── user/                  唯一的小程序工程（用户 + 骑手 + 聊天）
+│       ├── pages/xyyx/        首页 / 发布 / 详情 / 订单 / 我的 / 协议 / 反馈
+│       ├── pages/rider/       骑手工作台 / 中心 / 申请 / 详情 / 收入
+│       ├── pages/chat/        订单聊天
+│       └── uniCloud-alipay/   ★ 后端唯一源码（支付宝云）
+│           ├── cloudfunctions/
+│           │   ├── common/xyyx-common/   鉴权·字段裁剪·记账·聊天
+│           │   ├── xyyx-user/            用户端云对象
+│           │   ├── xyyx-rider/           骑手端云对象
+│           │   ├── xyyx-pay/             微信支付 V3 / mock
+│           │   ├── xyyx-admin/           管理后台云对象
+│           │   └── xyyx-cron/            定时任务（自动确认 + 清理 nonce）
+│           └── database/                 表 schema + 索引
 ├── admin/                     后台（uni-admin）
-├── reference/                 uni-id 登录模板（参考，不部署）
+├── tests/                     回归测试
 ├── tools/
 │   ├── wx-mcp/                自研微信小程序开发插件（MCP）
-│   └── scripts/               密钥、部署、测试、地图 key 脚本
-└── miniprogram/               原生小程序离线演示版（历史产物）
+│   └── scripts/               密钥、部署、测试、图片脚本
+└── reference/                 uni-id 登录模板（参考，不部署）
 ```
 
 **为什么后端只放 `apps/user` 一处**：uniCloud 要求云函数挂在某个 uni-app 工程下才能被 HBuilderX 上传。
@@ -78,10 +82,9 @@ xiaodida/
 | L4 真机 | 开发者工具/真机跑通主流程 | 人工 |
 
 ```powershell
-# L3 编译
+# L3 编译（只有一个小程序工程）
 $cli = "F:\HBuilderX.5.05.2026032417\HBuilderX\cli.exe"
-& $cli launch mp-weixin --project "F:\xiaodida\apps\user"  --compile true
-& $cli launch mp-weixin --project "F:\xiaodida\apps\rider" --compile true
+& $cli launch mp-weixin --project "F:\xiaodida\apps\user" --compile true
 ```
 
 **不许**在没跑过 L1–L3 的情况下说「做完了」。

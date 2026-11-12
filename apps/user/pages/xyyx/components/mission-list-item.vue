@@ -7,7 +7,7 @@
 				</view>
 				<view class="price-box">
 					<text class="price-symbol">¥</text>
-					<text class="price-value">{{item.money}}</text>
+					<text class="price-value">{{ money(item.money) }}</text>
 				</view>
 			</view>
 			<view class="card-body">
@@ -45,10 +45,13 @@
 	 *
 	 * 用户端只「看」不「抢」——抢单是骑手端的事，所以这里没有接单按钮。
 	 */
+	import { fmtMoney } from '@/common/rider-util.js'
+
 	export default {
 		name: 'MissionListItem',
 		props: ['listData'],
 		methods: {
+			money(v) { return fmtMoney(v) },
 			clickMissionOrder(item) {
 				uni.setStorageSync('currentViewTaskId', item.id);
 				uni.navigateTo({

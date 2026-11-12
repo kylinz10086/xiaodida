@@ -1,9 +1,0 @@
-{
-  "name": "uni-open-bridge-common",
-  "version": "1.0.0",
-  "description": "uni-open-bridge-common",
-  "main": "index.js",
-  "dependencies": {
-    "uni-config-center": "file:../uni-config-center"
-  }
-}

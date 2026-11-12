@@ -1,7 +1,0 @@
-{
-  "name": "xyyx-user",
-  "version": "1.0.0",
-  "description": "校递达用户端云对象",
-  "main": "index.obj.js",
-  "dependencies": {}
-}

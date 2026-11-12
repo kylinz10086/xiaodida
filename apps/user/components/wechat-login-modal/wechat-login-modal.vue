@@ -8,7 +8,7 @@
 					<image class="logo" src="/static/icon/logo1.png" mode="aspectFit"></image>
 					<view class="brand">
 						<text class="title">校递达</text>
-						<text class="subtitle">校园快递代取服务平台</text>
+						<text class="subtitle">校园快递 · 代取带餐 · 同校互助</text>
 					</view>
 				</view>
 			</view>
@@ -81,6 +81,27 @@ export default {
 			uni.showLoading({ title: '登录中...', mask: true })
 			
 			try {
+				// 必须紧跟用户点击，先取微信资料；再清缓存/发请求，避免丢失用户手势
+				let wxProfile = {}
+				if (typeof uni.getUserProfile === 'function') {
+					try {
+						const p = await uni.getUserProfile({ desc: '用于展示头像和昵称' })
+						wxProfile = (p && p.userInfo) || {}
+					} catch (e) {
+						console.warn('用户未授权微信资料，继续登录', e)
+					}
+				}
+
+				// 清掉旧测试账号/旧 token 残留，避免新登录后仍显示 13800001234 之类的测试资料
+				try {
+					uni.removeStorageSync('userInfo')
+					uni.removeStorageSync('uniIdToken')
+					uni.removeStorageSync('token')
+					uni.removeStorageSync('uni_id_token')
+					await this.$store.dispatch('setUserData', {})
+					await this.$store.dispatch('setUserToken', '')
+				} catch (e) {}
+
 				const loginRes = await new Promise((resolve, reject) => {
 					uni.login({
 						provider: 'weixin',
@@ -109,17 +130,27 @@ export default {
 				if (token) {
 					uni.setStorageSync('uniIdToken', token)
 					uni.setStorageSync('token', token)
+					await this.$store.dispatch('setUserToken', token)
 					
 					const userInfo = result.userInfo || {}
+					const nickname = String(wxProfile.nickName || userInfo.nickname || '微信用户').slice(0, 20)
+					const avatar = wxProfile.avatarUrl || userInfo.avatar || userInfo.avatar_file?.url || '/static/icon/head1.png'
 					const userData = {
-						avatar: userInfo.avatar || userInfo.avatar_file?.url || '/static/icon/head1.png',
-						nickname: userInfo.nickname || '微信用户',
-						mobile: userInfo.mobile || '',
+						avatar,
+						nickname,
+						// 手机号不以登录返回值为准，避免把测试号带出来；进「我的」后从云端资料读取/手动绑定
+						mobile: '',
 						uid: result.uid
 					}
 					uni.setStorageSync('userInfo', userData)
-					this.$store.dispatch('setUserData', userData)
-					this.$store.dispatch('setUserToken', token)
+					await this.$store.dispatch('setUserData', userData)
+
+					// 把微信昵称/头像写回 xyyx-users；失败不阻塞登录
+					try {
+						await this.$store.dispatch('updateProfile', { nickname, avatar })
+					} catch (e) {
+						console.warn('同步微信资料失败', e)
+					}
 					
 					uni.showToast({ title: '登录成功', icon: 'success' })
 					setTimeout(() => {
@@ -130,18 +161,29 @@ export default {
 				}
 			} catch (err) {
 				uni.hideLoading()
+				// 技术细节留给控制台，弹窗只给用户看得懂的话
 				console.error('登录失败:', err)
-				uni.showToast({
-					title: err.message || err.errMsg || '登录失败，请重试',
-					icon: 'none',
-					duration: 3000
+				const msg = String((err && (err.errMsg || err.message)) || '')
+				const friendly = /timeout|超时/i.test(msg)
+					? '网络有点慢，请稍后再试'
+					: /network|fail|域名|证书/i.test(msg)
+						? '连不上服务器，检查一下网络再试'
+						: '登录没成功，请再试一次'
+				uni.showModal({
+					title: '登录失败',
+					content: friendly + '\n如果一直失败，可以在「我的 - 意见反馈」里告诉我们。',
+					showCancel: false
 				})
 			} finally {
 				this.loading = false
 			}
 		},
 		goToAgreement(type) {
-			uni.showToast({ title: '功能开发中', icon: 'none' })
+			// 协议页早就有了，之前只弹「功能开发中」属于漏接
+			const url = type === 'privacy'
+				? '/pages/xyyx/agreement/privacy-policy'
+				: '/pages/xyyx/agreement/user-agreement'
+			uni.navigateTo({ url })
 		}
 	}
 }
@@ -200,8 +242,9 @@ export default {
 		left: 0;
 		right: 0;
 		height: 100%;
-		background: linear-gradient(135deg, #4A90E2 0%, #357ABD 50%, #2E6BB0 100%);
-		border-radius: 0 0 50% 50% / 0 0 30rpx 30rpx;
+		/* 和首页顶部品牌区同一套渐变，登录页看起来才像同一个 App */
+		background: linear-gradient(160deg, #007AFF 0%, #3AA0FF 100%);
+		border-radius: 0 0 32rpx 32rpx;
 	}
 	
 	.header-info {

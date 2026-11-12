@@ -11,8 +11,8 @@
  * 环境约定（都可用环境变量覆盖）：
  *   WX_CLI         微信开发者工具命令行  默认 F:\微信web开发者工具\cli.bat
  *   WX_PROJECT     默认小程序工程         默认 <repo>\miniprogram
- *   WX_UNI_DIST    默认 uni-app 编译产物  默认 <repo>\校递达app客户端\unpackage\dist\dev\mp-weixin
- *   WX_UNI_SRC     默认 uni-app 源码工程  默认 <repo>\校递达app客户端
+ *   WX_UNI_DIST    默认 uni-app 编译产物  默认 <repo>\apps\user\unpackage\dist\build\mp-weixin
+ *   WX_UNI_SRC     默认 uni-app 源码工程  默认 <repo>\apps\user
  *   HBX_CLI        HBuilderX 命令行       默认 F:\HBuilderX.5.05.2026032417\HBuilderX\cli.exe
  */
 import { spawn } from 'node:child_process'
@@ -24,8 +24,17 @@ const REPO = process.env.WX_REPO || 'F:\\xiaodida'
 const WX_CLI = process.env.WX_CLI || 'F:\\微信web开发者工具\\cli.bat'
 const HBX_CLI = process.env.HBX_CLI || 'F:\\HBuilderX.5.05.2026032417\\HBuilderX\\cli.exe'
 const DEFAULT_PROJECT = process.env.WX_PROJECT || path.join(REPO, 'miniprogram')
-const UNI_DIST = process.env.WX_UNI_DIST || path.join(REPO, 'apps', 'user', 'unpackage', 'dist', 'dev', 'mp-weixin')
+const UNI_DIST = process.env.WX_UNI_DIST || path.join(REPO, 'apps', 'user', 'unpackage', 'dist', 'build', 'mp-weixin')
 const UNI_SRC = process.env.WX_UNI_SRC || path.join(REPO, 'apps', 'user')
+
+/** HBuilderX 在不同版本会把产物写进 dist/build 或 dist/dev，这里都探测一下 */
+function detectUniDist() {
+  const base = path.join(REPO, 'apps', 'user', 'unpackage', 'dist')
+  for (const p of [UNI_DIST, path.join(base, 'build', 'mp-weixin'), path.join(base, 'dev', 'mp-weixin')]) {
+    if (existsSync(path.join(p, 'app.json'))) return p
+  }
+  return UNI_DIST
+}
 const LOG_DIR = path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'cache', 'wx-mcp')
 const MAX_TEXT = 12000
 
@@ -349,7 +358,7 @@ const TOOLS = [
 
 function resolveProject(args = {}) {
   if (args.projectPath) return args.projectPath
-  if (args.target === 'uni-dist') return UNI_DIST
+  if (args.target === 'uni-dist') return detectUniDist()
   return DEFAULT_PROJECT
 }
 
@@ -362,7 +371,8 @@ async function toolEnv() {
   lines.push(`微信开发者工具 CLI：${WX_CLI} ${existsSync(WX_CLI) ? '✓' : '✗ 不存在'}`)
   lines.push(`HBuilderX CLI：${HBX_CLI} ${existsSync(HBX_CLI) ? '✓' : '✗ 不存在'}`)
   lines.push(`默认小程序工程：${DEFAULT_PROJECT} ${existsSync(DEFAULT_PROJECT) ? '✓' : '✗ 不存在'}`)
-  lines.push(`uni-app 编译产物：${UNI_DIST} ${existsSync(UNI_DIST) ? '✓' : '✗ 不存在'}`)
+  const detectedDist = detectUniDist()
+  lines.push(`uni-app 编译产物：${detectedDist} ${existsSync(detectedDist) ? '✓' : '✗ 不存在'}`)
   lines.push(`uni-app 源码工程：${UNI_SRC} ${existsSync(UNI_SRC) ? '✓' : '✗ 不存在'}`)
 
   const ver = await run(WX_CLI, ['--version'], { timeoutMs: 60000 })
@@ -463,15 +473,16 @@ async function toolCompile(args) {
       '  1. 先调 wx_hbx_open 启动 HBuilderX，再重试本工具；',
       '  2. 直接在 HBuilderX 里 运行 → 运行到小程序模拟器 → 微信开发者工具。',
       `源码：${project}`,
-      `产物目录：${UNI_DIST}`,
+      `产物目录：${detectUniDist()}`,
     ].join('\n')
   }
   // HBuilderX CLI 的 publish 子命令按平台编译；具体参数以 cli.exe --help 为准
   const r = await run(HBX_CLI, ['publish', '--platform', 'mp-weixin', '--project', project], { timeoutMs: 600000 })
   const text = combine(r)
-  const ok = existsSync(path.join(UNI_DIST, 'app.json'))
+  const detectedDist = detectUniDist()
+  const ok = existsSync(path.join(detectedDist, 'app.json'))
   return [
-    ok ? `✓ 产物已存在：${UNI_DIST}` : '? 产物目录未检出 app.json，可能编译失败',
+    ok ? `✓ 产物已存在：${detectedDist}` : '? 产物目录未检出 app.json，可能编译失败',
     `模式：${mode}`,
     '',
     text,
