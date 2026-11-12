@@ -122,7 +122,7 @@ export default {
 		wallet: (s) => s.wallet,
 		profile: (s) => s.profile,
 		busyId: (s) => s.busyId,
-		commissionRate: (s) => s.profile.commission_rate || 0.05,
+		commissionRate: (s) => s.profile.commission_rate || 0.08,
 		/** 送达后是否还要等用户确认（服务端开关 AUTO_SETTLE_ON_DELIVER 决定） */
 		needConfirm: (s) => s.profile.auto_settle_on_deliver === false
 	},
@@ -214,10 +214,12 @@ export default {
 			}
 		},
 
-		async markPicked({ commit }, taskId) {
+		async markPicked({ commit }, payload) {
+			const taskId = typeof payload === 'string' ? payload : payload && payload.taskId
+			const proof = typeof payload === 'string' ? '' : (payload && payload.proof) || ''
 			commit('SET_BUSY', taskId)
 			try {
-				const res = await api().markPicked(taskId, requestMeta())
+				const res = await api().markPicked(taskId, requestMeta(), proof)
 				if (res.code !== 0) throw new Error(res.msg)
 				// 立刻把本地状态推进到「已取件」，不等下一次拉取
 				commit('PATCH_TASK', { id: taskId, patch: { picked_time: (res.data && res.data.picked_time) || Date.now() } })
@@ -231,10 +233,12 @@ export default {
 		 * 送达。服务端在 AUTO_SETTLE_ON_DELIVER 模式下会顺手结算，
 		 * 返回值里的 data.income / data.settled 用来给骑手弹「收入已到账」。
 		 */
-		async markDelivered({ commit }, taskId) {
+		async markDelivered({ commit }, payload) {
+			const taskId = typeof payload === 'string' ? payload : payload && payload.taskId
+			const proof = typeof payload === 'string' ? '' : (payload && payload.proof) || ''
 			commit('SET_BUSY', taskId)
 			try {
-				const res = await api().markDelivered(taskId, requestMeta())
+				const res = await api().markDelivered(taskId, requestMeta(), proof)
 				if (res.code !== 0) throw new Error(res.msg)
 				const d = (res.data && res.data) || {}
 				const now = Date.now()

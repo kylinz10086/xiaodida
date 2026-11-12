@@ -22,6 +22,9 @@
 | `cancelTask(taskId, reason)` | | 未接单可取消，自动退款 |
 | `confirmReceipt(taskId)` | | 确认收货 → 触发结算；要求骑手已 `markDelivered`（有 `delivered_time`） |
 | `submitReview(data)` | `{taskId, score(1-5), content}` | 评价骑手 |
+| `listReviews(params)` | `{taskId? 或 riderId?, page?, pageSize?}` | 评价列表；taskId 仅订单双方可看，不返回评价人 uid |
+| `getRiderProfile(riderId)` | `riderId` | 骑手公开资料：昵称/头像/评分/完成单数 |
+| `uploadImage(data)` | `{base64, ext, dir}` | 服务端中转上传图片，返回 `{fileID,size}`；限 900KB |
 | `listChats()` | — | 会话列表（最近聊过的订单 + 未读数） |
 | `getChat(taskId, opts)` | `{after?}` | 拉消息；`after` 为增量轮询，打开即把对方消息标已读 |
 | `sendChat(taskId, content, meta, type)` | `type='text'\|'image'` | 发消息；仅订单双方可发，限流 30 条/分钟 |
@@ -64,12 +67,13 @@
 | `listHall(params)` | `{type?, page?, pageSize?}` | 抢单大厅（接单前视图） |
 | `getTaskDetail(taskId)` | | 订单详情（接单前看不到联系方式） |
 | `grabTask(taskId)` | | 抢单，用状态 CAS 防并发 |
-| `markPicked(taskId)` | | 标记已取件 |
-| `markDelivered(taskId)` | | 标记已送达，写 `auto_confirm_at` |
+| `markPicked(taskId, meta, proofImage?)` | | 标记已取件；`proofImage` 为可选留痕图片 fileID |
+| `markDelivered(taskId, meta, proofImage?)` | | 标记已送达，写 `auto_confirm_at`；可带送达留痕 |
+| `uploadImage(data)` | `{base64, ext, dir}` | 服务端中转上传图片 |
 | `abandonTask(taskId, reason)` | | 放弃，订单回到大厅 |
 | `listMyJobs(params)` | `{status?}` | 我的任务 |
 | `getWallet()` | — | 余额 + 最近 50 条流水 |
-| `requestWithdraw(data)` | `{amount}` | 提现申请（人工审核），最低 10 元 |
+| `requestWithdraw(data)` | `{amount}` | 提现申请（人工审核），最低 3 元 |
 | `listChats()` | — | 骑手侧会话列表 |
 | `getChat(taskId, opts)` | `{after?}` | 拉消息（只允许该单骑手本人） |
 | `sendChat(taskId, content, meta, type)` | `type='text'\|'image'` | 发消息 |

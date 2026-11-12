@@ -79,6 +79,7 @@
 
 		<view class="form-section">
 			<view class="section-title">取件地点</view>
+			<view class="reuse-tip" v-if="reusedAddress">已沿用上次的取件/送达地址，点「选择」可以换</view>
 			<view class="address-input-group">
 				<view class="address-input-item">
 					<view class="address-input-header">
@@ -141,10 +142,11 @@
 
 		<view class="form-section">
 			<view class="section-title">悬赏金额</view>
+			<view class="price-hint" v-if="priceHint">{{ priceHint }}</view>
 			<view class="price-section">
 				<view class="quick-prices">
 					<view 
-						v-for="(item, index) in quickPrices" 
+						v-for="(item, index) in quickPriceList" 
 						:key="index"
 						@click="setQuickPrice(item)"
 						:class="['quick-price-btn', {'price-chosen': requirePrice === item}]">
@@ -244,6 +246,9 @@
 	import { mapActions, mapGetters } from 'vuex';
 	import UserInfoListItem from '../components/user-info-list-item.vue';
 	import Moment from '../utils/moment/moment.js';
+	import { uploadImage, getTempUrls } from '@/common/image.js';
+	import { distanceMeters } from '@/common/rider-util.js';
+	import { requestNotify } from '@/common/notify.js';
 
 	export default {
 		components: {
@@ -284,6 +289,10 @@
 				selectedQuickPrice: null,
 				quickPrices: [3, 5, 8, 10, 15, 20],
 				ceshiData: [],
+				/** 图片 fileID 与预览地址的对应关系；提交时只传 fileID */
+				imageIds: [],
+				imageIdByPreview: {},
+				reusedAddress: false,
 				token: '',
 				submitting: false,
 				origin: {
@@ -319,6 +328,28 @@
 				const cents = Math.round(amount * 100);
 				const fee = Math.min(Math.round(cents * this.refundFeeRate), Math.max(0, cents - 1));
 				return ((cents - fee) / 100).toFixed(2);
+			},
+			/** 按距离 + 物品大小给三档参考价；没有坐标就退回默认档，不报错 */
+			quickPriceList() {
+				const o = this.origin || {};
+				const d = this.destination || {};
+				let base = [3, 5, 8];
+				if (o.latitude && o.longitude && d.latitude && d.longitude) {
+					const m = distanceMeters(o.latitude, o.longitude, d.latitude, d.longitude);
+					if (m >= 0 && m < 600) base = [3, 4, 5];
+					else if (m < 1200) base = [4, 6, 8];
+					else if (m < 2500) base = [6, 8, 10];
+					else base = [8, 12, 15];
+				}
+				if (/大|超大/.test(this.itemSize || '')) base = base.map((n) => n + 2);
+				return base;
+			},
+			priceHint() {
+				const o = this.origin || {};
+				const d = this.destination || {};
+				if (!o.latitude || !d.latitude) return '';
+				const list = this.quickPriceList;
+				return '按距离和物品大小，建议 ' + list[0] + '-' + list[list.length - 1] + ' 元，也可以自己填';
 			}
 		},
 		onLoad: function(option) {
@@ -328,6 +359,7 @@
 				uni.setNavigationBarTitle({
 					title: '校递达-发布需求'
 				});
+				this.prefillAddress();
 			} else {
 				uni.setNavigationBarTitle({
 					title: '校递达-修改需求'
@@ -339,6 +371,16 @@
 		},
 		methods: {
 			...mapActions(['publishTask', 'publishAndPay', 'cancelTask', 'updateTask', 'payOrder', 'fetchUserInfo']),
+			/** 地址复用：只存最近一次，不做地址簿 */
+			prefillAddress() {
+				try {
+					const o = uni.getStorageSync('last_origin');
+					const d = uni.getStorageSync('last_destination');
+					if (o && o.name) this.origin = o;
+					if (d && d.name) this.destination = d;
+					this.reusedAddress = !!((o && o.name) || (d && d.name));
+				} catch (e) {}
+			},
 			/**
 			 * 联系方式直接从账号资料带过来：号码在「我的-手机号」维护过一次，
 			 * 发布任务时就不该再手打一遍。
@@ -384,7 +426,15 @@
 						if (this.destination && !this.destination.position && this.destination.longitude && this.destination.latitude) {
 							this.destination.position = this.destination.longitude + ',' + this.destination.latitude;
 						}
-						this.ceshiData = task.images || [];
+						// 图片：库里存 fileID，编辑时换成临时链接预览，提交时再换回 fileID
+						const ids = (task.images || []).slice(0, 6);
+						this.imageIds = ids.slice();
+						this.ceshiData = ids.slice();
+						getTempUrls(ids).then((map) => {
+							if (!Object.keys(map).length) return;
+							this.ceshiData = ids.map((id) => map[id] || id);
+							ids.forEach((id) => { if (map[id]) this.imageIdByPreview[map[id]] = id; });
+						});
 					}
 					uni.removeStorageSync('currentEditTaskId');
 				}
@@ -441,18 +491,21 @@
 				});
 			},
 			ceshiChooseSuccess: async function(params) {
-				// 图片传到 uniCloud 云存储。以前那套七牛上传依赖一个外部 upToken 服务，
-				// 域名不在小程序白名单里，而且用户图片会落到别人的 bucket 上 —— 已弃用。
+				// 图片走云函数中转（真机 uploadFile 需要 OSS 域名白名单，没配会失败）
 				for (const filePath of params) {
 					try {
-						const ext = (filePath.match(/\.(\w+)$/) || [])[1] || 'jpg';
-						const up = await uniCloud.uploadFile({
-							filePath,
-							cloudPath: 'xyyx-tasks/' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.' + ext
-						});
-						if (up.fileID) this.ceshiData.push(up.fileID);
+						uni.showLoading({ title: '上传中…', mask: true });
+						const fileID = await uploadImage(filePath, { role: 'user', dir: 'tasks', width: 1280 });
+						const map = await getTempUrls([fileID]);
+						const preview = map[fileID] || fileID;
+						this.imageIds.push(fileID);
+						this.imageIdByPreview[preview] = fileID;
+						this.imageIdByPreview[fileID] = fileID;
+						this.ceshiData.push(preview);
 					} catch (e) {
-						uni.showToast({ title: '图片上传失败，稍后再试', icon: 'none' });
+						uni.showToast({ title: (e && e.message) || '图片上传失败', icon: 'none' });
+					} finally {
+						uni.hideLoading();
 					}
 				}
 			},
@@ -542,7 +595,11 @@
 					remark: this.remark,
 					origin: this.origin,
 					destination: this.destination,
-					images: this.ceshiData
+					// 预览地址可能是临时链接，提交时换回 fileID；老数据没有映射就原样传
+					images: (this.ceshiData || [])
+						.map((url) => this.imageIdByPreview[url] || url)
+						.filter((id) => typeof id === 'string' && id.length > 0)
+						.slice(0, 6)
 				};
 				
 				// 有弹窗时要等用户看完再跳转，否则弹窗刚出来页面就被切走了
@@ -591,6 +648,13 @@
 					} else {
 						// 发布后立刻走支付（配了商户证书是微信支付，没配是模拟支付）
 						await this.publishAndPay(taskData);
+						// 发布成功后问一次订阅授权：接单/送达通知
+						await requestNotify(['taskAccepted', 'taskDelivered']).catch(() => {});
+						// 下次发单直接带出这次的地点
+						try {
+							uni.setStorageSync('last_origin', this.origin);
+							uni.setStorageSync('last_destination', this.destination);
+						} catch (e) {}
 						uni.showToast({
 							duration: 1500,
 							icon: 'success',
@@ -889,6 +953,25 @@
 		}
 	}
 	
+	.price-hint {
+		font-size: 23rpx;
+		color: #AD6800;
+		background: #FFF8E8;
+		border-radius: 10rpx;
+		padding: 12rpx 18rpx;
+		margin-bottom: 16rpx;
+		line-height: 1.5;
+	}
+
+	.reuse-tip {
+		font-size: 23rpx;
+		color: #007AFF;
+		background: rgba(0, 122, 255, 0.08);
+		border-radius: 10rpx;
+		padding: 12rpx 18rpx;
+		margin-bottom: 16rpx;
+	}
+
 	.price-section {
 		display: flex;
 		flex-direction: column;

@@ -62,7 +62,7 @@
 						<text class="hint">骑手单笔提现的最低金额</text>
 					</view>
 					<view class="field-input">
-						<input class="input" type="digit" v-model="form.minWithdrawYuan" placeholder="10" />
+						<input class="input" type="digit" v-model="form.minWithdrawYuan" placeholder="3" />
 						<text class="unit">元</text>
 					</view>
 				</view>
@@ -158,7 +158,7 @@
 					refundFeePercent: '0',
 					minOrderYuan: '1',
 					maxOrderYuan: '1000',
-					minWithdrawYuan: '10',
+					minWithdrawYuan: '3',
 					autoSettleOnDeliver: true,
 					autoConfirmHours: '24',
 					grabPerMinute: '30',
@@ -247,7 +247,7 @@
 								refundFeeRate: rRate,
 								minOrderYuan: minY,
 								maxOrderYuan: maxY,
-								minWithdrawYuan: this.num(this.form.minWithdrawYuan, 10),
+								minWithdrawYuan: this.num(this.form.minWithdrawYuan, 3),
 								autoSettleOnDeliver: !!this.form.autoSettleOnDeliver,
 								autoConfirmHours: Math.round(this.num(this.form.autoConfirmHours, 24)),
 								grabPerMinute: Math.round(this.num(this.form.grabPerMinute, 30)),

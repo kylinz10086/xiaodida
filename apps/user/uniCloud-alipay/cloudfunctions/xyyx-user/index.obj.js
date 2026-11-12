@@ -197,7 +197,18 @@ const api = {
   async getTaskDetail(taskId) {
     const auth = await C.requireAuth(this)
     const task = await C.getTask(C.taskIdOf(taskId))
-    return C.ok(C.taskForUser(task, auth.uid))
+    const data = C.taskForUser(task, auth.uid)
+    // 发布者看自己的已完成订单时，告诉前端「评没评过」，按钮才知道要不要出现
+    data.reviewed = false
+    if (task.publisher_id === auth.uid && task.status === C.STATUS.DONE && task.runner_id) {
+      const r = await C.db
+        .collection(C.COLL.reviews)
+        .where({ task_id: task._id, from_id: auth.uid })
+        .limit(1)
+        .get()
+      data.reviewed = !!(r.data && r.data.length)
+    }
+    return C.ok(data)
   },
 
   async listMyTasks(params = {}) {
@@ -214,7 +225,22 @@ const api = {
     const where = status ? C.dbCmd.and(base, { status }) : base
 
     const res = await C.db.collection(C.COLL.tasks).where(where).orderBy('create_time', 'desc').limit(50).get()
-    return C.ok({ list: res.data.map((t) => C.taskForUser(t, auth.uid)) })
+    const list = res.data.map((t) => C.taskForUser(t, auth.uid))
+
+    // 列表角标「待评价」：一次 in 查询补齐，避免每单查一次
+    const reviewIds = list.filter((t) => t.role === 'publisher' && t.status === 3).map((t) => t._id)
+    if (reviewIds.length) {
+      const r = await C.db
+        .collection(C.COLL.reviews)
+        .where({ task_id: C.dbCmd.in(reviewIds), from_id: auth.uid })
+        .limit(500)
+        .get()
+      const reviewed = new Set((r.data || []).map((x) => x.task_id))
+      list.forEach((t) => {
+        t.reviewed = reviewed.has(t._id)
+      })
+    }
+    return C.ok({ list })
   },
 
   /* ---------------- 修改订单 ---------------- */
@@ -500,6 +526,110 @@ const api = {
       await C.db.collection(C.COLL.users).doc(task.runner_id).update({ rating, rider_rating_count: count })
     }
     return C.ok(null, '感谢评价')
+  },
+
+  /**
+   * 评价列表。
+   * - taskId：看某一单的评价（仅订单双方）
+   * - riderId：看某个骑手的评价（登录用户都能看，但不返回评价人 uid/手机号）
+   */
+  async listReviews(params = {}) {
+    const auth = await C.requireAuth(this)
+    const page = C.int(params.page || 1, { min: 1, max: 999, name: '页码' })
+    const pageSize = C.int(params.pageSize || 10, { min: 1, max: 50, name: '每页条数' })
+    const taskId = params.taskId ? C.taskIdOf(params.taskId) : ''
+    const riderId = C.str(params.riderId, { max: 64, name: '骑手ID' })
+    C.assert(taskId || riderId, 400, '缺少查询条件')
+
+    let where
+    if (taskId) {
+      const task = await C.getTask(taskId)
+      C.assert(task.publisher_id === auth.uid || task.runner_id === auth.uid, 403, '只能看自己订单的评价')
+      where = { task_id: taskId }
+    } else {
+      where = { to_id: riderId }
+    }
+
+    const [countRes, res] = await Promise.all([
+      C.db.collection(C.COLL.reviews).where(where).count(),
+      C.db
+        .collection(C.COLL.reviews)
+        .where(where)
+        .orderBy('create_time', 'desc')
+        .skip((page - 1) * pageSize)
+        .limit(pageSize)
+        .get()
+    ])
+    const rows = res.data || []
+
+    // 补昵称/头像，但不下发 from_id，避免评价人被反查
+    const profileMap = {}
+    const fromIds = Array.from(new Set(rows.map((r) => r.from_id).filter(Boolean)))
+    if (fromIds.length) {
+      const pRes = await C.db.collection(C.COLL.users).where({ _id: C.dbCmd.in(fromIds) }).get()
+      for (const p of pRes.data || []) profileMap[p._id] = p
+    }
+
+    let rating = null
+    let ratingCount = 0
+    if (riderId) {
+      const p = await C.ensureProfile(riderId)
+      rating = Number(p.rating) || 5
+      ratingCount = Number(p.rider_rating_count) || 0
+    }
+
+    return C.ok({
+      list: rows.map((r) => {
+        const p = profileMap[r.from_id] || {}
+        return {
+          _id: r._id,
+          score: Number(r.score) || 5,
+          content: r.content || '',
+          create_time: r.create_time,
+          from_nickname: p.nickname || '同学',
+          from_avatar: p.avatar || ''
+        }
+      }),
+      total: countRes.total || 0,
+      page,
+      pageSize,
+      rating,
+      rating_count: ratingCount
+    })
+  },
+
+  /** 骑手公开资料：昵称、头像、评分、完成单数；不返回真名/学号/手机号 */
+  async getRiderProfile(riderId) {
+    await C.requireAuth(this)
+    const id = C.str(riderId, { min: 1, max: 64, name: '骑手ID', required: true })
+    const p = await C.ensureProfile(id)
+    C.assert((p.rider_status || 0) === 2, 404, '该骑手不存在')
+    const done = await C.db
+      .collection(C.COLL.tasks)
+      .where({ runner_id: id, status: C.STATUS.DONE })
+      .count()
+    return C.ok({
+      _id: id,
+      nickname: p.nickname || '骑手',
+      avatar: p.avatar || '',
+      rating: Number(p.rating) || 5,
+      rating_count: Number(p.rider_rating_count) || 0,
+      done_count: done.total || 0
+    })
+  },
+
+  /* ---------------- 图片上传 ---------------- */
+
+  /**
+   * 图片服务端中转上传。
+   * 真机上客户端直传 OSS 需要配置 uploadFile 合法域名，没配就报
+   * `uploadFile:fail url not in domain list`；这里改走云函数，只依赖 request 域名。
+   */
+  async uploadImage(data = {}) {
+    const auth = await C.requireAuth(this)
+    await C.checkNonce(auth, data.nonce, data.timestamp)
+    await C.rateLimit(auth, 'upload', 30, 10 * 60 * 1000)
+    return C.ok(await C.uploadImageBase64(data.base64, { ext: data.ext, dir: data.dir }), '上传成功')
   },
 
   /* ---------------- 订单内聊天 ---------------- */

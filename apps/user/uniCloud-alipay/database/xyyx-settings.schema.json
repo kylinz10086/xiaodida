@@ -9,7 +9,7 @@
       "bsonType": "double",
       "minimum": 0,
       "maximum": 0.5,
-      "description": "平台抽佣比例（0.05 = 5%），骑手收入 = 订单金额 × (1 - 该值)"
+      "description": "平台抽佣比例（0.08 = 8%），骑手收入 = 订单金额 × (1 - 该值)"
     },
     "refundFeeRate": {
       "bsonType": "double",

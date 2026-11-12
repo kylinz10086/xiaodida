@@ -22,6 +22,7 @@
 					</text>
 					<!-- 退款/补差价是钱的事，必须显眼 -->
 					<text class="tag money-tag warn" v-if="item.needPay">待补差价 ¥{{item.due}}</text>
+					<text class="tag review-tag" v-if="item.orderType === 'published' && item.state === 3 && item.reviewed === false">待评价</text>
 					<text class="tag money-tag" :class="item.refundStatus === 'failed' ? 'bad' : 'ok'" :title="item.refundFailReason || ''"
 						v-if="item.refund && item.refund > 0">
 						{{item.refundStatusText || '已退款'}} ¥{{item.refund}}
@@ -42,7 +43,7 @@
 			<view class="card-footer">
 				<view class="price-box">
 					<text class="price-symbol">¥</text>
-					<text class="price-value">{{item.money}}</text>
+					<text class="price-value">{{ money(item.money) }}</text>
 				</view>
 				<view class="action-area">
 					<view class="time-info">
@@ -95,7 +96,8 @@
 
 <script>
 	import { mapActions } from 'vuex';
-	
+	import { fmtMoney } from '@/common/rider-util.js';
+
 	export default {
 		name: 'OrderListItem',
 		props: ['listData'],
@@ -108,6 +110,9 @@
 		},
 		methods: {
 			...mapActions(['completeTask', 'confirmTask', 'cancelTask', 'abandonTask', 'payOrder']),
+			money(v) {
+				return fmtMoney(v);
+			},
 			/** 涨价改单后补差价：只付差额，不会再收一遍全款 */
 			payDifference(item) {
 				uni.showModal({
@@ -282,6 +287,7 @@
 		&.ok { background-color: rgba(52, 199, 89, 0.12); color: #1A7F37; }
 		&.bad { background-color: rgba(255, 59, 48, 0.12); color: #C62828; }
 	}
+	.review-tag { font-weight: 600; background-color: rgba(255, 149, 0, 0.12); color: #AD6800; }
 	.route-info { display: flex; align-items: center; padding: 16rpx; background-color: #F2F2F7; border-radius: 16rpx; }
 	.route-point { display: flex; align-items: center; flex: 1; }
 	.point-icon { width: 36rpx; height: 36rpx; line-height: 36rpx; text-align: center; border-radius: 18rpx; font-size: 20rpx; color: #fff; margin-right: 12rpx;

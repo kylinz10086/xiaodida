@@ -24,7 +24,7 @@
 		<view class="card">
 			<view class="card-title">
 				<text>申请提现</text>
-				<text class="card-extra">最低 10 元</text>
+				<text class="card-extra">最低 3 元</text>
 			</view>
 
 			<view class="withdraw-row">
@@ -86,7 +86,7 @@
 			},
 			quickAmounts() {
 				const balance = Number(this.wallet.balance) || 0
-				const list = [10, 20, 50].filter((n) => n <= balance)
+				const list = [3, 5, 10].filter((n) => n <= balance)
 				return list
 			}
 		},
@@ -123,8 +123,8 @@
 
 			fillAll() {
 				const balance = Number(this.wallet.balance) || 0
-				if (balance < 10) {
-					uni.showToast({ title: '余额不足 10 元', icon: 'none' })
+				if (balance < 3) {
+					uni.showToast({ title: '余额不足 3 元', icon: 'none' })
 					return
 				}
 				this.amount = balance.toFixed(2)
@@ -133,7 +133,7 @@
 			async withdraw() {
 				if (this.submitting) return
 				const n = Number(this.amount)
-				if (!(n >= 10)) return uni.showToast({ title: '最低提现 10 元', icon: 'none' })
+				if (!(n >= 3)) return uni.showToast({ title: '最低提现 3 元', icon: 'none' })
 				if (n > (Number(this.wallet.balance) || 0)) return uni.showToast({ title: '超出可提现余额', icon: 'none' })
 
 				this.submitting = true

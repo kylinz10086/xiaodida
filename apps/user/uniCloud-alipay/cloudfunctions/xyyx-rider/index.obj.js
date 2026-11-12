@@ -253,8 +253,8 @@ const api = {
     return C.ok({ id, income: C.yuan(incomeCent) }, `抢单成功，预计可赚 ¥${C.yuan(incomeCent)}`)
   },
 
-  /** 标记取到件 */
-  async markPicked(taskId, meta = {}) {
+  /** 标记取到件；proofImage 可选（云存储 fileID），用于纠纷留痕 */
+  async markPicked(taskId, meta = {}, proofImage = '') {
     const auth = await C.requireAuth(this)
     await C.checkNonce(auth, meta.nonce, meta.timestamp)
     const id = C.taskIdOf(taskId)
@@ -264,13 +264,17 @@ const api = {
     // 幂等：重复点不报错，直接告诉他已经取过件了（弱网重试很常见）
     if (task.picked_time) return C.ok({ picked_time: task.picked_time }, '已经标记过取件了')
 
+    const proof = proofImage ? C.str(proofImage, { max: 300, name: '取件留痕' }) : ''
+    const patch = { picked_time: Date.now() }
+    if (proof) patch.pick_proof = proof
+
     const upd = await C.db
       .collection(C.COLL.tasks)
       .where({ _id: id, runner_id: auth.uid, status: C.STATUS.ONGOING })
-      .update({ picked_time: Date.now() })
+      .update(patch)
     C.assert(upd.updated === 1, 409, '状态已变化，请下拉刷新')
 
-    return C.ok(null, '已取件，记得尽快送到')
+    return C.ok({ picked_time: patch.picked_time }, '已取件，记得尽快送到')
   },
 
   /**
@@ -281,7 +285,7 @@ const api = {
    * 这正是「接单之后无法完成订单」的修复点 —— 以前点完送达状态还是「进行中」，
    * 只能等用户确认或 24 小时定时任务，用户一忙这单就永远完不成。
    */
-  async markDelivered(taskId, meta = {}) {
+  async markDelivered(taskId, meta = {}, proofImage = '') {
     const auth = await C.requireAuth(this)
     await C.checkNonce(auth, meta.nonce, meta.timestamp)
     const id = C.taskIdOf(taskId)
@@ -293,14 +297,18 @@ const api = {
     C.assert(task.picked_time > 0, 400, '请先点「已取件」，再到送达点')
 
     const now = Date.now()
+    const proof = proofImage ? C.str(proofImage, { max: 300, name: '送达留痕' }) : ''
+    const patch = {
+      delivered_time: now,
+      // 即便送达即结算，也留一个时间戳：用户 24 小时内可以申诉/售后
+      auto_confirm_at: now + C.S().autoConfirmHours * 3600 * 1000
+    }
+    if (proof) patch.deliver_proof = proof
+
     const upd = await C.db
       .collection(C.COLL.tasks)
       .where({ _id: id, runner_id: auth.uid, status: C.STATUS.ONGOING })
-      .update({
-        delivered_time: now,
-        // 即便送达即结算，也留一个时间戳：用户 24 小时内可以申诉/售后
-        auto_confirm_at: now + C.S().autoConfirmHours * 3600 * 1000
-      })
+      .update(patch)
     C.assert(upd.updated === 1, 409, '状态已变化，请下拉刷新')
 
     await C.chatSystem(task, '骑手已标记送达')
@@ -463,6 +471,15 @@ const api = {
       })
     )
     return C.ok({ amount: C.yuan(amountCent) }, '提现申请已提交，审核通过后到账')
+  },
+
+  /* ---------------- 图片上传 ---------------- */
+
+  async uploadImage(data = {}) {
+    const auth = await C.requireAuth(this)
+    await C.checkNonce(auth, data.nonce, data.timestamp)
+    await C.rateLimit(auth, 'upload', 30, 10 * 60 * 1000)
+    return C.ok(await C.uploadImageBase64(data.base64, { ext: data.ext, dir: data.dir }), '上传成功')
   },
 
   /* ---------------- 订单内聊天 ---------------- */

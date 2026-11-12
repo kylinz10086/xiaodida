@@ -231,6 +231,7 @@
 <script>
 	import { mapGetters, mapActions } from 'vuex'
 	import { getLocation, distanceMeters, formatDistance, formatWalk, timeAgo, fmtMoney, errText } from '@/common/rider-util.js'
+	import { askProofImage } from '@/common/image.js'
 
 	export default {
 		data() {
@@ -398,8 +399,10 @@
 
 			async picked(item) {
 				if (this.busyId) return
+				const proof = await askProofImage({ role: 'rider' })
+				if (proof === null) return
 				try {
-					await this.markPicked(item._id)
+					await this.markPicked({ taskId: item._id, proof })
 					uni.showToast({ title: '已取件，请尽快送达', icon: 'none' })
 					await this.load()
 				} catch (e) {
@@ -412,13 +415,15 @@
 				if (this.busyId) return
 				uni.showModal({
 					title: '确认送达',
-					content: '确认已经把这单交到用户手上？确认后订单完成，扣除平台佣金后的收入会立刻进入你的钱包。',
+					content: '确认已经把这单交到用户手上？确认后订单完成，扣除平台服务费后的收入会立刻进入你的钱包。',
 					confirmText: '已送达',
 					confirmColor: '#34C759',
 					success: async (r) => {
 						if (!r.confirm) return
+						const proof = await askProofImage({ role: 'rider' })
+						if (proof === null) return
 						try {
-							const res = await this.markDelivered(item._id)
+							const res = await this.markDelivered({ taskId: item._id, proof })
 							const d = (res && res.data) || {}
 							if (d.settled) {
 								uni.showModal({

@@ -7,7 +7,7 @@
     "_id": { "description": "用户ID（等于 uni-id-users._id）" },
     "role": { "bsonType": "string", "enum": ["user", "rider", "admin"], "description": "当前身份" },
     "nickname": { "bsonType": "string", "maxLength": 20, "description": "昵称" },
-    "avatar": { "bsonType": "string", "maxLength": 300, "description": "头像地址" },
+    "avatar": { "bsonType": "string", "maxLength": 70000, "description": "头像：静态路径或压缩后的 data URI" },
     "mobile": { "bsonType": "string", "description": "手机号（敏感，只下发脱敏值）" },
     "school": { "bsonType": "string", "description": "学校，固定浙江中医药大学" },
 

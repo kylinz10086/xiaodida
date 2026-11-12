@@ -120,7 +120,8 @@
 					refundStatusText: task.refundStatusText,
 					refundFailReason: task.refundFailReason,
 					refundFee: task.refundFee,
-					payStatus: task.payStatus
+					payStatus: task.payStatus,
+					reviewed: task.reviewed
 				}))
 
 				if (this.currentStatus === 'pending') {

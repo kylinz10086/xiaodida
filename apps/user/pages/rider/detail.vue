@@ -166,6 +166,7 @@
 <script>
 	import { mapGetters, mapActions } from 'vuex'
 	import { buildMap, navigateTo, callPhone, copyText, distanceMeters, formatDistance, formatWalk, getLocation, errText } from '@/common/rider-util.js'
+	import { askProofImage } from '@/common/image.js'
 
 	export default {
 		data() {
@@ -281,8 +282,10 @@
 
 			async picked() {
 				if (this.busyId) return
+				const proof = await askProofImage({ role: 'rider' })
+				if (proof === null) return
 				try {
-					await this.markPicked(this.id)
+					await this.markPicked({ taskId: this.id, proof })
 					uni.showToast({ title: '已取件，请尽快送达', icon: 'none' })
 					await this.load()
 				} catch (e) {
@@ -295,13 +298,15 @@
 				if (this.busyId) return
 				uni.showModal({
 					title: '确认送达',
-					content: '确认已把物品交到用户手上？确认后订单完成，扣除平台佣金后的收入会立刻进入你的钱包。',
+					content: '确认已把物品交到用户手上？确认后订单完成，扣除平台服务费后的收入会立刻进入你的钱包。',
 					confirmText: '已送达',
 					confirmColor: '#34C759',
 					success: async (r) => {
 						if (!r.confirm) return
+						const proof = await askProofImage({ role: 'rider' })
+						if (proof === null) return
 						try {
-							const res = await this.markDelivered(this.id)
+							const res = await this.markDelivered({ taskId: this.id, proof })
 							const d = (res && res.data) || {}
 							uni.showModal({
 								title: d.settled ? '订单已完成' : d.awaiting_payment ? '已送达，待用户结清' : '已送达',

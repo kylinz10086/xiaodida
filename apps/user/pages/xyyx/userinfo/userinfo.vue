@@ -115,6 +115,13 @@
 					<text class="arrow">›</text>
 				</view>
 			</view>
+			<view class="menu-item" @click="goSupport">
+				<text class="menu-label">联系客服</text>
+				<view class="menu-right">
+					<text class="menu-value">订单问题、投诉</text>
+					<text class="arrow">›</text>
+				</view>
+			</view>
 		</view>
 		
 		<view class="menu-section" v-if="loggedIn">
@@ -187,6 +194,7 @@
 import { mapActions, mapGetters } from 'vuex'
 import WechatLoginModal from '@/components/wechat-login-modal/wechat-login-modal.vue'
 import { fmtMoney } from '@/common/rider-util.js'
+import { avatarDataUri } from '@/common/image.js'
 
 export default {
 	components: {
@@ -279,6 +287,29 @@ export default {
 			}
 			uni.navigateTo({ url: '/pages/chat/list?role=user' })
 		},
+		goSupport() {
+			const p = this.$store.state.profile || {}
+			const mobile = (p.settings && p.settings.supportMobile) || ''
+			if (mobile) {
+				uni.showModal({
+					title: '联系客服',
+					content: '客服电话：' + mobile + '\n工作时间 9:00-21:00',
+					confirmText: '拨打',
+					success: (r) => {
+						if (r.confirm) uni.makePhoneCall({ phoneNumber: String(mobile), fail: () => {} })
+					}
+				})
+				return
+			}
+			uni.showModal({
+				title: '联系客服',
+				content: '客服在线时间 9:00-21:00。你可以先在「意见反馈」里留言，我们会尽快回复。',
+				confirmText: '去反馈',
+				success: (r) => {
+					if (r.confirm) uni.navigateTo({ url: '/pages/xyyx/feedback/feedback' })
+				}
+			})
+		},
 		async loadChatUnread() {
 			try {
 				const list = await this.$store.dispatch('listChats')
@@ -370,17 +401,10 @@ export default {
 					const old = this.userInfo.avatar
 					this.userInfo.avatar = tempFilePath
 					try {
-						// 本地临时路径只在当前设备有效，必须传到云存储再保存 fileID，
-						// 否则骑手端/管理后台看到的是 wxfile:// 开头的失效地址。
-						const ext = (tempFilePath.match(/\.(\w+)$/) || [])[1] || 'jpg'
-						const up = await uniCloud.uploadFile({
-							filePath: tempFilePath,
-							cloudPath: `xyyx-avatars/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
-						})
-						const fileID = up.fileID
-						if (!fileID) throw new Error('上传失败')
-						await this.updateUserInfo({ avatar: fileID })
-						this.userInfo.avatar = fileID
+						// 头像压成 data URI 存资料里：不依赖云存储，不会因 uploadFile 域名白名单失败
+						const uri = await avatarDataUri(tempFilePath)
+						await this.updateUserInfo({ avatar: uri })
+						this.userInfo.avatar = uri
 						uni.setStorageSync('userInfo', this.userInfo)
 						uni.showToast({ title: '头像已更新', icon: 'success' })
 					} catch (e) {

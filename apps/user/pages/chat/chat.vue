@@ -38,8 +38,8 @@
 							<text v-else>{{ m.from_id === me ? initial(myName) : initial(peer.nickname) }}</text>
 						</view>
 						<view class="bubble-wrap">
-							<image v-if="m.type === 'image'" class="bubble-img" :src="m.content" mode="widthFix"
-								@click="previewImage(m.content)"></image>
+							<image v-if="m.type === 'image'" class="bubble-img" :src="imgUrl(m.content)" mode="widthFix"
+								@click="previewImage(imgUrl(m.content))"></image>
 							<view v-else class="bubble">{{ m.content }}</view>
 							<text class="send-state" v-if="m.pending">发送中…</text>
 							<text class="send-state err" v-else-if="m.failed" @click="resend(m)">发送失败，点此重发</text>
@@ -74,6 +74,8 @@
 	 */
 	const QUICK = ['我快到了', '放门口就行', '在楼下等你', '稍等一下']
 
+	import { uploadImage, getTempUrls } from '@/common/image.js'
+
 	function pad(n) {
 		return n < 10 ? '0' + n : '' + n
 	}
@@ -92,6 +94,7 @@
 				loading: false,
 				anchor: '',
 				timer: null,
+				imgMap: {},
 				quickReplies: QUICK
 			}
 		},
@@ -113,8 +116,7 @@
 			myColor() {
 				return this.colorOf(this.myName)
 			}
-		},
-		onLoad(query) {
+		},		onLoad(query) {
 			this.taskId = (query && query.taskId) || ''
 			this.role = query && query.role === 'rider' ? 'rider' : 'user'
 			if (!this.taskId) {
@@ -157,6 +159,7 @@
 					this.peer = d.peer || {}
 					this.task = d.task || {}
 					this.messages = d.list || []
+					this.resolveImages()
 					this.syncTitle()
 					this.scrollToBottom()
 					this.startPolling()
@@ -179,6 +182,7 @@
 					const add = list.filter((m) => !exists.has(m._id))
 					if (!add.length) return
 					this.messages = this.messages.concat(add)
+					this.resolveImages()
 					this.scrollToBottom()
 				} catch (e) {
 					// 轮询失败不打扰用户
@@ -205,6 +209,21 @@
 					this.anchor = 'chat-bottom'
 				})
 			},
+			imgUrl(fileID) {
+				return this.imgMap[fileID] || fileID
+			},
+			/** 把聊天里的 cloud:// 图片换成临时链接；懒加载，失败就保留原值 */
+			async resolveImages() {
+				const ids = this.messages
+					.filter((m) => m.type === 'image' && typeof m.content === 'string' && m.content.indexOf('cloud://') === 0)
+					.map((m) => m.content)
+					.filter((id) => !this.imgMap[id])
+				if (!ids.length) return
+				const map = await getTempUrls(Array.from(new Set(ids)))
+				if (Object.keys(map).length) {
+					this.imgMap = Object.assign({}, this.imgMap, map)
+				}
+			},
 			useQuick(q) {
 				this.draft = q
 			},
@@ -222,14 +241,12 @@
 						if (!path) return
 						uni.showLoading({ title: '上传中…', mask: true })
 						try {
-							const ext = (path.match(/\.(\w+)$/) || [])[1] || 'jpg'
-							const up = await uniCloud.uploadFile({
-								filePath: path,
-								cloudPath: 'xyyx-chat/' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.' + ext
-							})
+							// 走云函数中转，避免真机 uploadFile 域名白名单限制
+							const fileID = await uploadImage(path, { role: this.role, dir: 'chat', width: 1080 })
 							uni.hideLoading()
-							if (!up.fileID) throw new Error('上传失败')
-							this.pushAndSend(up.fileID, 'image')
+							const map = await getTempUrls([fileID])
+							if (map[fileID]) this.imgMap = Object.assign({}, this.imgMap, map)
+							this.pushAndSend(fileID, 'image')
 						} catch (e) {
 							uni.hideLoading()
 							uni.showToast({ title: (e && e.message) || '图片发送失败', icon: 'none' })
@@ -267,6 +284,7 @@
 							create_time: saved.create_time || now
 						})
 					}
+					if (type === 'image') this.resolveImages()
 				} catch (e) {
 					const m = this.messages.find((x) => x._id === tempId)
 					if (m) {

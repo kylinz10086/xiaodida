@@ -31,7 +31,7 @@ const SCHOOL = '浙江中医药大学'
  */
 const DEFAULT_SETTINGS = {
   /** 平台抽佣比例（骑手收入 = 订单金额 × (1 - 该值)） */
-  commissionRate: 0.05,
+  commissionRate: 0.08,
   /**
    * 退款时扣除的支付通道费率。
    * 默认 0 = 全额原路退回（当前产品选择）。
@@ -46,7 +46,7 @@ const DEFAULT_SETTINGS = {
   minOrderYuan: 1,
   maxOrderYuan: 1000,
   /** 单笔提现下限（元） */
-  minWithdrawYuan: 10,
+  minWithdrawYuan: 3,
   /** 抢单频率限制：每分钟最多几次 */
   grabPerMinute: 30,
   /** 放弃订单限制：每天最多几次 */
@@ -608,6 +608,9 @@ function taskForUser(task, viewerId) {
       : { name: task.destination && task.destination.name, detail: '', latitude: 0, longitude: 0 },
     remark: canSeeDetail ? task.remark : '',
     images: task.images || [],
+    // 取件/送达留痕：只有订单双方能看，纠纷时当证据
+    pick_proof: canSeeDetail ? task.pick_proof || '' : '',
+    deliver_proof: canSeeDetail ? task.deliver_proof || '' : '',
     create_time: task.create_time,
     pay_time: task.pay_time,
     accept_time: task.accept_time,
@@ -682,6 +685,8 @@ function taskForRider(task, riderId) {
     origin: place(task.origin),
     destination: place(task.destination),
     images: task.images || [],
+    pick_proof: accepted ? task.pick_proof || '' : '',
+    deliver_proof: accepted ? task.deliver_proof || '' : '',
     remark: accepted ? task.remark || '' : '',
     create_time: task.create_time,
     accept_time: task.accept_time,
@@ -1396,6 +1401,53 @@ async function getTask(taskId) {
 }
 
 /* ------------------------------------------------------------------ */
+/* 图片上传（服务端中转，绕开小程序 uploadFile 域名白名单）              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 客户端把图片压成 base64 传给云函数，这里写临时文件再传云存储。
+ *
+ * 为什么不用客户端 uniCloud.uploadFile：
+ * 真机上 uploadFile 直传 OSS，需要在小程序后台把 OSS 域名加进 uploadFile 合法域名；
+ * 没加就报 `url not in domain list`。服务端中转只走 callFunction 的 request 域名，
+ * 不需要额外配置，代价是流量经过云函数（图片限制 900KB）。
+ */
+async function uploadImageBase64(base64, opts = {}) {
+	const raw = String(base64 || '')
+	const b64 = raw.replace(/^data:image\/\w+;base64,/, '')
+	assert(b64, 400, '图片数据为空')
+
+	let buf
+	try {
+		buf = Buffer.from(b64, 'base64')
+	} catch (e) {
+		throw new BizError(400, '图片数据无效')
+	}
+	assert(buf.length > 0, 400, '图片数据无效')
+	assert(buf.length <= 900 * 1024, 413, '图片太大，请压缩后再传')
+
+	const ext = String(opts.ext || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 5) || 'jpg'
+	const dir = String(opts.dir || 'misc').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 20) || 'misc'
+	const tmp = `/tmp/xyyx-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+
+	// 云函数运行时只有 /tmp 可写
+	const fs = require('fs')
+	fs.writeFileSync(tmp, buf)
+	try {
+		const res = await uniCloud.uploadFile({
+			filePath: tmp,
+			cloudPath: `xyyx/${dir}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+		})
+		assert(res && res.fileID, 500, '上传失败')
+		return { fileID: res.fileID, size: buf.length }
+	} finally {
+		try {
+			fs.unlinkSync(tmp)
+		} catch (e) {}
+	}
+}
+
+/* ------------------------------------------------------------------ */
 /* 订单内聊天（用户 ↔ 骑手）                                            */
 /* ------------------------------------------------------------------ */
 
@@ -1681,5 +1733,6 @@ module.exports = {
   chatUnread,
   chatSend,
   chatSystem,
-  chatConversations
+  chatConversations,
+  uploadImageBase64
 }

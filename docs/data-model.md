@@ -12,7 +12,7 @@
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `role` | string | `user` / `rider` / `admin` |
-| `nickname` `avatar` `mobile` | string | 资料；`mobile` 属敏感字段 |
+| `nickname` `avatar` `mobile` | string | 资料；`avatar` 可能是静态路径或压缩后的 data URI，`mobile` 属敏感字段 |
 | `school` | string | 固定「浙江中医药大学」 |
 | `rider_status` | int | 0 未申请 / 1 审核中 / 2 已通过 / 3 已拒绝 |
 | `real_name` `student_no` | string | **仅平台审核可见，任何端都不下发** |
@@ -34,7 +34,7 @@
 | 状态 | `status` `pay_status` `pay_mode` `transaction_id` | 见状态机 |
 | 双方 | `publisher_id/name/avatar` `runner_id/name/avatar/rating` | |
 | 时间 | `create_time` `pay_time` `accept_time` `picked_time` `delivered_time` `auto_confirm_at` `complete_time` `cancel_time` | |
-| 其他 | `remark` `images` `abandon_reason` `cancel_reason` `complete_by` | |
+| 其他 | `remark` `images` `pick_proof` `deliver_proof` `abandon_reason` `cancel_reason` `complete_by` | 留痕图存 fileID |
 
 ### 状态机
 

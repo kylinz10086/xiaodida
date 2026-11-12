@@ -38,6 +38,8 @@
 					<view class="tl-main">
 						<text class="tl-title">已取件</text>
 						<text class="tl-time">{{ taskData.picked_time ? formatTime(taskData.picked_time) : '骑手取件后会更新' }}</text>
+						<image v-if="taskData.pick_proof" class="proof-img" :src="imageUrl(taskData.pick_proof)"
+							mode="aspectFill" @click="previewProof(taskData.pick_proof)"></image>
 					</view>
 				</view>
 				<view class="tl" :class="{ on: !!taskData.delivered_time }">
@@ -45,6 +47,8 @@
 					<view class="tl-main">
 						<text class="tl-title">已送达</text>
 						<text class="tl-time">{{ taskData.delivered_time ? formatTime(taskData.delivered_time) : '等待送达' }}</text>
+						<image v-if="taskData.deliver_proof" class="proof-img" :src="imageUrl(taskData.deliver_proof)"
+							mode="aspectFill" @click="previewProof(taskData.deliver_proof)"></image>
 					</view>
 				</view>
 				<view class="tl" :class="{ on: taskData.status === 3 }">
@@ -132,7 +136,7 @@
 		<view class="detail-section" v-if="taskData.images && taskData.images.length > 0">
 			<view class="section-title">补充图片</view>
 			<view class="picture-display">
-				<image v-for="(img, index) in taskData.images" :key="index" :src="img" class="preview-image" mode="aspectFill" @click="previewImage(index)"></image>
+				<image v-for="(img, index) in taskData.images" :key="index" :src="imageUrl(img)" class="preview-image" mode="aspectFill" @click="previewImage(index)"></image>
 			</view>
 		</view>
 
@@ -152,6 +156,16 @@
 				<view class="chat-btn-sm" v-if="taskData.role === 'publisher' || taskData.role === 'runner'" @click="goChat">
 					<text>发消息</text>
 					<text class="chat-dot" v-if="chatUnread > 0">{{ chatUnread > 99 ? '99+' : chatUnread }}</text>
+				</view>
+			</view>
+
+			<view class="review-list" v-if="reviews.length">
+				<view class="review-item" v-for="r in reviews" :key="r._id">
+					<view class="review-top">
+						<text class="review-name">{{ r.from_nickname }}</text>
+						<text class="review-stars">{{ '★★★★★'.slice(0, r.score) }}</text>
+					</view>
+					<text class="review-text">{{ r.content || '默认好评' }}</text>
 				</view>
 			</view>
 		</view>
@@ -216,6 +230,10 @@
 				<view class="action-btn cancel" @click="goBack">返回</view>
 				<view class="action-btn confirm" v-if="taskData.rider" @click="goChat">联系骑手</view>
 			</block>
+			<block v-else-if="taskData.status === 3">
+				<view class="action-btn cancel" @click="goBack">返回</view>
+				<view class="action-btn complete" v-if="!taskData.reviewed && !reviewedLocal" @click="openReview">评价骑手</view>
+			</block>
 			<block v-else>
 				<view class="action-btn cancel" @click="goBack">返回</view>
 			</block>
@@ -229,19 +247,51 @@
 		<view class="action-section" v-else>
 			<view class="action-btn cancel" @click="goBack">返回</view>
 		</view>
+
+		<!-- 评价弹层：1-5 星 + 快捷标签 + 200 字 -->
+		<view class="review-mask" v-if="showReview" @touchmove.stop.prevent>
+			<view class="review-modal">
+				<text class="review-title">评价这单骑手</text>
+				<view class="star-row">
+					<text v-for="n in 5" :key="n" class="star" :class="{ on: n <= reviewStars }" @click="reviewStars = n">★</text>
+				</view>
+				<view class="tag-row">
+					<text v-for="t in reviewTagOptions" :key="t" class="rtag" :class="{ on: pickedTags.indexOf(t) >= 0 }"
+						@click="toggleTag(t)">{{ t }}</text>
+				</view>
+				<textarea class="review-input" v-model="reviewContent" maxlength="200"
+					placeholder="说点什么（选填，200 字以内）"></textarea>
+				<view class="review-actions">
+					<view class="review-btn cancel" @click="showReview = false">取消</view>
+					<view class="review-btn ok" :class="{ disabled: submittingReview }" @click="submitReview">
+						{{ submittingReview ? '提交中…' : '提交' }}
+					</view>
+				</view>
+			</view>
+		</view>
 	</view>
 </template>
 
 <script>
 	import { mapGetters, mapActions } from 'vuex';
 	import { navigateTo, fmtMoney } from '@/common/rider-util.js';
+	import { getTempUrls } from '@/common/image.js';
 
 	export default {
 		data() {
 			return {
 				optionPageType: 'completed',
 				taskId: null,
-				chatUnread: 0
+				chatUnread: 0,
+				imageMap: {},
+				reviews: [],
+				showReview: false,
+				reviewStars: 5,
+				pickedTags: [],
+				reviewContent: '',
+				submittingReview: false,
+				reviewedLocal: false,
+				reviewTagOptions: ['准时', '态度好', '包装完好', '沟通及时']
 			};
 		},
 		computed: {
@@ -270,7 +320,13 @@
 		},
 		onShow() {
 			if (this.taskId) {
-				this.$store.dispatch('fetchDetail', this.taskId).catch(() => {});
+				this.$store
+					.dispatch('fetchDetail', this.taskId)
+					.then(() => {
+						this.resolveImages();
+						this.loadReviews();
+					})
+					.catch(() => {});
 				this.loadChatUnread();
 			}
 		},
@@ -278,6 +334,23 @@
 			...mapActions(['acceptTask', 'completeTask', 'confirmTask', 'abandonTask']),
 			money(v) {
 				return fmtMoney(v);
+			},
+			imageUrl(id) {
+				return this.imageMap[id] || id;
+			},
+			async resolveImages() {
+				const ids = [
+					...(this.taskData.images || []),
+					this.taskData.pick_proof,
+					this.taskData.deliver_proof
+				].filter((id) => typeof id === 'string' && id.indexOf('cloud://') === 0);
+				if (!ids.length) return;
+				const map = await getTempUrls(ids);
+				if (Object.keys(map).length) this.imageMap = Object.assign({}, this.imageMap, map);
+			},
+			previewProof(id) {
+				const url = this.imageUrl(id);
+				if (url && url.indexOf('cloud://') !== 0) uni.previewImage({ urls: [url], current: url });
 			},
 			async loadChatUnread() {
 				try {
@@ -408,8 +481,51 @@
 					}
 				});
 			},
+			async loadReviews() {
+				const rider = this.taskData.rider;
+				if (!rider || !rider._id) return;
+				try {
+					const data = await this.$store.dispatch('listReviews', { riderId: rider._id, pageSize: 3 });
+					this.reviews = (data && data.list) || [];
+				} catch (e) {
+					this.reviews = [];
+				}
+			},
+			openReview() {
+				this.reviewStars = 5;
+				this.pickedTags = [];
+				this.reviewContent = '';
+				this.showReview = true;
+			},
+			toggleTag(t) {
+				const i = this.pickedTags.indexOf(t);
+				if (i >= 0) this.pickedTags.splice(i, 1);
+				else this.pickedTags.push(t);
+			},
+			async submitReview() {
+				if (this.submittingReview) return;
+				this.submittingReview = true;
+				const tagText = this.pickedTags.length ? this.pickedTags.join('、') + '。' : '';
+				const content = (tagText + this.reviewContent.trim()).slice(0, 200);
+				try {
+					await this.$store.dispatch('submitReview', {
+						taskId: this.taskId,
+						score: this.reviewStars,
+						content
+					});
+					this.showReview = false;
+					this.reviewedLocal = true;
+					uni.showToast({ title: '评价成功', icon: 'success' });
+					this.loadReviews();
+				} catch (e) {
+					uni.showToast({ title: (e && e.message) || '评价失败', icon: 'none' });
+				} finally {
+					this.submittingReview = false;
+				}
+			},
 			previewImage(index) {
-				uni.previewImage({ urls: this.taskData.images, current: index });
+				const urls = (this.taskData.images || []).map((id) => this.imageUrl(id));
+				uni.previewImage({ urls, current: urls[index] });
 			}
 		}
 	}
@@ -494,6 +610,13 @@
 	.tl-main { display: flex; flex-direction: column; }
 	.tl-title { font-size: 27rpx; color: #5c6370; }
 	.tl-time { margin-top: 4rpx; font-size: 21rpx; color: #9aa1ad; }
+	.proof-img {
+		width: 132rpx;
+		height: 132rpx;
+		border-radius: 10rpx;
+		margin-top: 10rpx;
+		background: #f2f3f5;
+	}
 
 	.cancelled {
 		padding: 12rpx 0;
@@ -537,6 +660,55 @@
 		font-weight: 600;
 		flex-shrink: 0;
 	}
+
+	.review-list { margin-top: 14rpx; border-top: 1rpx solid #f2f3f5; padding-top: 14rpx; }
+	.review-item { padding: 10rpx 0; }
+	.review-top { display: flex; justify-content: space-between; align-items: center; }
+	.review-name { font-size: 23rpx; color: #5c6370; }
+	.review-stars { font-size: 22rpx; color: #ffb400; letter-spacing: 2rpx; }
+	.review-text { display: block; margin-top: 4rpx; font-size: 24rpx; color: #3a4049; line-height: 1.6; }
+
+	.review-mask {
+		position: fixed;
+		top: 0;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		background: rgba(0, 0, 0, 0.45);
+		z-index: 99;
+		display: flex;
+		align-items: flex-end;
+	}
+
+	.review-modal {
+		width: 100%;
+		background: #fff;
+		border-radius: 24rpx 24rpx 0 0;
+		padding: 32rpx 32rpx calc(32rpx + env(safe-area-inset-bottom));
+	}
+
+	.review-title { display: block; font-size: 32rpx; font-weight: 700; text-align: center; color: #1c1f24; }
+	.star-row { display: flex; justify-content: center; gap: 18rpx; margin: 24rpx 0 8rpx; }
+	.star { font-size: 56rpx; color: #e4e8ee; }
+	.star.on { color: #ffb400; }
+	.tag-row { display: flex; flex-wrap: wrap; gap: 12rpx; justify-content: center; margin: 18rpx 0; }
+	.rtag { padding: 8rpx 20rpx; border-radius: 20rpx; background: #f2f3f5; color: #5c6370; font-size: 23rpx; }
+	.rtag.on { background: rgba(255, 149, 0, 0.12); color: #b26a00; }
+	.review-input {
+		width: 100%;
+		height: 160rpx;
+		background: #f7f8fa;
+		border-radius: 12rpx;
+		padding: 18rpx;
+		font-size: 26rpx;
+		line-height: 1.6;
+		box-sizing: border-box;
+	}
+	.review-actions { display: flex; gap: 20rpx; margin-top: 24rpx; }
+	.review-btn { flex: 1; height: 80rpx; line-height: 80rpx; text-align: center; border-radius: 40rpx; font-size: 28rpx; }
+	.review-btn.cancel { background: #f2f3f5; color: #5c6370; }
+	.review-btn.ok { background: #1677ff; color: #fff; font-weight: 600; }
+	.review-btn.ok.disabled { opacity: 0.5; }
 	.time-display { display: flex; align-items: center; gap: 12rpx; }
 	.time-tag { padding: 12rpx 24rpx; background-color: rgba(0, 122, 255, 0.1); color: #007AFF; border-radius: 16rpx; font-size: 28rpx; font-weight: 500; }
 	.time-detail { font-size: 28rpx; color: #000; }

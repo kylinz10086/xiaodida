@@ -150,7 +150,7 @@ const store = new Vuex.Store({
         total_income: (p.wallet && p.wallet.income) || 0
       }
     },
-    commissionRate: (state) => state.profile.commission_rate || 0.05
+    commissionRate: (state) => state.profile.commission_rate || 0.08
   },
 
   mutations: {
@@ -408,6 +408,12 @@ const store = new Vuex.Store({
       const res = await api().submitReview(withMeta(data))
       if (res.code !== 0) throw new Error(res.msg)
       return res
+    },
+
+    async listReviews(_, params = {}) {
+      const res = await api().listReviews(params)
+      if (res.code !== 0) throw new Error(res.msg)
+      return res.data || { list: [], total: 0 }
     },
 
     /** 反馈 / 注销申请，都落到 xyyx-feedback */
