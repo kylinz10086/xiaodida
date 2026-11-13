@@ -40,7 +40,7 @@
 						</view>
 						<view class="bubble-wrap">
 							<view v-if="m.type === 'image'" class="bubble-img-wrap">
-								<image class="bubble-img" :src="bubbleSrc(m)" mode="widthFix" @click="previewImage(m)"></image>
+								<image class="bubble-img" :src="bubbleSrc(m)" mode="widthFix" @click="openPreview(m)"></image>
 								<text v-if="!bubbleSrc(m)" class="bubble-img-tip">{{ m._imgFailed ? '图片加载失败，点开重试' : '图片加载中…' }}</text>
 							</view>
 							<view v-else class="bubble">{{ m.content }}</view>
@@ -77,7 +77,7 @@
 	 */
 	const QUICK = ['我快到了', '放门口就行', '在楼下等你', '稍等一下']
 
-	import { uploadImage, getTempUrls, thumbDataUri, dataUriToTempFile, fetchImageToTempFile } from '@/common/image.js'
+	import { uploadImage, getTempUrls, thumbDataUri, fetchImageToTempFile } from '@/common/image.js'
 
 	function pad(n) {
 		return n < 10 ? '0' + n : '' + n
@@ -352,50 +352,31 @@
 				this.messages = this.messages.filter((x) => x._id !== m._id)
 				this.pushAndSend(m.content, m.type || 'text', m.thumb || '')
 			},
-			/** 点开大图：原图（云函数分片取回、落本地文件）优先，取不到再用缩略图 */
-			async previewImage(m) {
+			/**
+			 * 点开看大图：交给自建的预览页（swiper + image）。
+			 * uni.previewImage 对本地文件/data URI 会一直转圈，这里不再用它。
+			 * 预览页先显示缩略图（秒开），再在后台取原图替换。
+			 */
+			openPreview(m) {
 				if (!m || m.type !== 'image') return
-				const isCloud = typeof m.content === 'string' && m.content.indexOf('cloud://') === 0
-				let url = this.imgMap[m.content] || ''
-				let lastErr = ''
-
-				// 1. 手头没有可用地址 → 先试临时链接
-				if (!displayable(url) && isCloud) {
-					const map = await getTempUrls([m.content])
-					url = map[m.content] || ''
-					if (url) this.imgMap = Object.assign({}, this.imgMap, { [m.content]: url })
-				}
-				// 2. 还是不行 → 云函数分片取原图，直接落成本地临时文件（多大都能看）
-				if (!displayable(url) && isCloud) {
-					uni.showLoading({ title: '加载原图…', mask: true })
-					try {
-						const local = await fetchImageToTempFile(this.role, m.content)
-						if (local) {
-							url = local
-							this.imgMap = Object.assign({}, this.imgMap, { [m.content]: local })
-							m._imgFailed = false
-						}
-					} catch (e) {
-						lastErr = (e && e.message) || ''
-						url = ''
-					}
-					uni.hideLoading()
-				}
-				// 3. 原图打不开 → 缩略图兜底
-				if (!displayable(url)) url = displayable(m.thumb) ? m.thumb : ''
-				if (!url) {
-					uni.showToast({ title: lastErr || '这张图暂时打不开', icon: 'none' })
+				const list = []
+				let current = 0
+				this.messages.forEach((msg) => {
+					if (msg.type !== 'image') return
+					const src = this.bubbleSrc(msg) || (displayable(msg.thumb) ? msg.thumb : '')
+					if (!src) return
+					if (msg === m) current = list.length
+					list.push({
+						src,
+						fileID: typeof msg.content === 'string' && msg.content.indexOf('cloud://') === 0 ? msg.content : ''
+					})
+				})
+				if (!list.length) {
+					uni.showToast({ title: '这张图暂时打不开', icon: 'none' })
 					return
 				}
-				// previewImage 对 data URI 支持不稳，先落成本地临时文件再看
-				if (url.indexOf('data:image/') === 0) {
-					const local = await dataUriToTempFile(url)
-					if (local) {
-						uni.previewImage({ urls: [local], current: local })
-						return
-					}
-				}
-				uni.previewImage({ urls: [url], current: url })
+				uni.setStorageSync('__imagePreview', { list: list.slice(0, 40), current, role: this.role })
+				uni.navigateTo({ url: '/pages/common/image-preview' })
 			},
 			showTime(i) {
 				if (i === 0) return true

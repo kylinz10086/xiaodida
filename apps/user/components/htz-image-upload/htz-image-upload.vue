@@ -49,7 +49,6 @@
 </style>
 
 <script>
-	import { dataUriToTempFile } from '@/common/image.js';
 	export default {
 		name: 'htz-image-upload',
 		props: {
@@ -190,18 +189,15 @@
 				});
 			},
 			imgPreview(item) {
-				// 缩略图是 data URI，扩展名正则认不出来；这里改成按「是不是视频」过滤
-				const list = (this.uploadLists || []).filter((it) => !this.isVideoItem(it))
-				if (!list.length) return
-				const idx = list.indexOf(item)
-				const toLocal = (u) => {
-					if (String(u).indexOf('data:image/') !== 0) return Promise.resolve(u)
-					return dataUriToTempFile(u).then((local) => local || u)
-				}
-				Promise.all(list.map(toLocal)).then((urls) => {
-					const current = urls[idx >= 0 ? idx : 0] || urls[0]
-					if (current) uni.previewImage({ urls, current, loop: true })
-				})
+				// 缩略图是 data URI，扩展名正则认不出来；这里改成按「是不是视频」过滤。
+				// 预览交给自建页面：uni.previewImage 对 data URI / 本地文件会一直转圈。
+				const urls = (this.uploadLists || []).filter((it) => !this.isVideoItem(it))
+				if (!urls.length) return
+				let current = urls.indexOf(item)
+				if (current < 0) current = 0
+				const list = urls.map((u) => ({ src: u }))
+				uni.setStorageSync('__imagePreview', { list, current, role: 'user' })
+				uni.navigateTo({ url: '/pages/common/image-preview' })
 			},
 			/** data URI 缩略图不是视频，别被扩展名正则误判成 video */
 			isVideoItem(item) {

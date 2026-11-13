@@ -217,6 +217,14 @@
 				"navigationBarTitleText": "",
 				"enablePullDownRefresh": false
 			}
+		},
+		{
+			"path": "pages/common/image-preview",
+			"style": {
+				"navigationStyle": "custom",
+				"navigationBarTitleText": "",
+				"disableScroll": true
+			}
 		}
 	],
 	"uniIdRouter": {

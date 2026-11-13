@@ -275,7 +275,7 @@
 <script>
 	import { mapGetters, mapActions } from 'vuex';
 	import { navigateTo, fmtMoney } from '@/common/rider-util.js';
-	import { getTempUrls, dataUriToTempFile, fetchImageToTempFile } from '@/common/image.js';
+	import { getTempUrls, fetchImageToTempFile } from '@/common/image.js';
 
 	export default {
 		data() {
@@ -384,41 +384,27 @@
 					}
 				}
 			},
-			/** 点开看大图：优先原图（云函数分片取回、落本地文件），没有再退回缩略图 */
-			async fullUrl(id) {
-				const cached = this.imageMap[id];
-				if (cached) return cached;
-				if (typeof id === 'string' && id.indexOf('cloud://') === 0) {
-					uni.showLoading({ title: '加载原图…', mask: true });
-					try {
-						const local = await fetchImageToTempFile('user', id);
-						if (local) {
-							this.imageMap = Object.assign({}, this.imageMap, { [id]: local });
-							return local;
-						}
-					} catch (e) {
-						// 继续用缩略图
-					} finally {
-						uni.hideLoading();
-					}
+			/** 打开自建预览页（缩略图秒开，原图后台替换），不再用会转圈的 uni.previewImage */
+			openPreviewById(id) {
+				const d = this.taskData || {};
+				const ids = [...(d.images || []), d.pick_proof, d.deliver_proof].filter(Boolean);
+				const list = [];
+				let current = 0;
+				for (const it of ids) {
+					const src = this.thumbOf(it) || this.imageMap[it] || (typeof it === 'string' && it.indexOf('cloud://') === 0 ? '' : it);
+					if (!src) continue;
+					if (it === id) current = list.length;
+					list.push({ src, fileID: typeof it === 'string' && it.indexOf('cloud://') === 0 ? it : '' });
 				}
-				return this.thumbOf(id) || '';
-			},
-			async previewProof(id) {
-				const url = (await this.fullUrl(id)) || this.imageUrl(id);
-				if (!url) {
+				if (!list.length) {
 					uni.showToast({ title: '图片暂时打不开', icon: 'none' });
 					return;
 				}
-				// data URI 先落成本地文件再预览，previewImage 对它支持不稳
-				if (url.indexOf('data:image/') === 0) {
-					const local = await dataUriToTempFile(url);
-					if (local) {
-						uni.previewImage({ urls: [local], current: local });
-						return;
-					}
-				}
-				uni.previewImage({ urls: [url], current: url });
+				uni.setStorageSync('__imagePreview', { list, current, role: 'user' });
+				uni.navigateTo({ url: '/pages/common/image-preview' });
+			},
+			previewProof(id) {
+				this.openPreviewById(id);
 			},
 			async loadChatUnread() {
 				try {
@@ -591,25 +577,11 @@
 					this.submittingReview = false;
 				}
 			},
-			async previewImage(index) {
+			previewImage(index) {
 				const ids = this.taskData.images || [];
 				const targetId = ids[index];
-				// 点开的那张优先取原图（云函数取回），别的图先用缩略图，避免一次拉一堆大图
-				let target = targetId ? (await this.fullUrl(targetId)) || this.imageUrl(targetId) : '';
-				if (!target) {
-					uni.showToast({ title: '图片暂时打不开', icon: 'none' });
-					return;
-				}
-				if (target.indexOf('data:image/') === 0) target = (await dataUriToTempFile(target)) || target;
-				const urls = [];
-				for (const id of ids) {
-					let u = this.imageUrl(id);
-					if (!u) continue;
-					if (u.indexOf('data:image/') === 0) u = (await dataUriToTempFile(u)) || u;
-					urls.push(u);
-				}
-				if (urls.indexOf(target) < 0) urls.push(target);
-				uni.previewImage({ urls, current: target });
+				if (!targetId) return;
+				this.openPreviewById(targetId);
 			}
 		}
 	}
