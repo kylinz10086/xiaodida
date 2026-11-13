@@ -305,6 +305,12 @@ const api = {
             .reduce((s, r) => s + r.amount_cent, 0)
         ),
         amount_all: C.yuan(filtered.reduce((s, r) => s + r.amount_cent, 0)),
+        // 待确认金额：微信已受理、等骑手在微信里点「确认收款」的那部分钱
+        pending_amount: C.yuan(
+          filtered
+            .filter((r) => r.state === 'WAIT_USER_CONFIRM')
+            .reduce((s, r) => s + r.amount_cent, 0)
+        ),
         success: filtered.filter((r) => r.state === 'SUCCESS').length,
         inflight: filtered.filter((r) => ['pending', 'ACCEPTED', 'TRANSFERING', 'PROCESSING', 'WAIT_USER_CONFIRM'].indexOf(r.state) >= 0).length,
         failed: filtered.filter((r) => ['FAIL', 'CANCELLED', 'EXPIRED'].indexOf(r.state) >= 0).length,

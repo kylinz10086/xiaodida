@@ -34,6 +34,10 @@
 					<text class="stat-label">已到账金额</text>
 				</view>
 				<view class="stat-card">
+					<text class="stat-num wait">¥{{ summary.pending_amount || 0 }}</text>
+					<text class="stat-label">待确认金额</text>
+				</view>
+				<view class="stat-card">
 					<text class="stat-num ok">{{ summary.success || 0 }}</text>
 					<text class="stat-label">已到账</text>
 				</view>
