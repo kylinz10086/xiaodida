@@ -299,10 +299,23 @@ export default {
 			return (res.data && res.data.unread) || 0
 		},
 
+		/**
+		 * 提现走 xyyx-pay（要调微信「商家转账到零钱」，支付证书只在那边）。
+		 * 返回里带 package_info 时，页面要用 wx.requestMerchantTransfer 拉起确认收款。
+		 */
 		async requestWithdraw(ctx, amount) {
-			const res = await api().requestWithdraw({ amount, ...requestMeta() })
+			const pay = uniCloud.importObject('xyyx-pay', { customUI: true })
+			const res = await pay.requestWithdraw({ amount, ...requestMeta() })
 			if (res.code !== 0) throw new Error(res.msg)
 			return res
+		},
+
+		/** 查询提现转账状态（确认收款后轮询） */
+		async queryWithdraw(_, outBillNo) {
+			const pay = uniCloud.importObject('xyyx-pay', { customUI: true })
+			const res = await pay.queryWithdraw(outBillNo)
+			if (res.code !== 0) throw new Error(res.msg)
+			return res.data || {}
 		}
 	}
 }

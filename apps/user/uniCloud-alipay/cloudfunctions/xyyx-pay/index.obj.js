@@ -270,10 +270,227 @@ async function stampPendingPay(task, amountCent, payNo) {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* 商家转账到零钱（骑手提现）                                            */
+/* ------------------------------------------------------------------ */
+
+const TRANSFER_PATH = '/v3/fund-app/mch-transfer/transfer-bills'
+/** 佣金报酬场景固定 1005；两条报备信息是微信要求的固定字段 */
+const TRANSFER_SCENE_ID = '1005'
+const TRANSFER_IP_WHITELIST_HINT = '请确认商户平台「商家转账 → 接口安全IP」已加入云函数出口IP'
+
+/** 今天 0 点（北京时间） */
+function todayStart() {
+  const OFFSET = 8 * 3600 * 1000
+  return Math.floor((Date.now() + OFFSET) / 86400000) * 86400000 - OFFSET
+}
+
+function transferRemark(text) {
+  return String(text || '跑腿收入提现').slice(0, 32)
+}
+
+function transferBody({ openid, amountCent, outBillNo }) {
+  return {
+    appid: PAY_CONFIG.appid,
+    out_bill_no: outBillNo,
+    transfer_scene_id: TRANSFER_SCENE_ID,
+    openid,
+    transfer_amount: amountCent,
+    transfer_remark: transferRemark('校递达跑腿报酬'),
+    user_recv_perception: '劳务报酬',
+    transfer_scene_report_infos: [
+      { info_type: '岗位类型', info_content: '校园跑腿骑手' },
+      { info_type: '报酬说明', info_content: '跑腿订单收入提现' }
+    ]
+  }
+}
+
+/** 云函数出口 IP（排查「接口安全IP」白名单用） */
+async function egressIp() {
+  try {
+    const r = await uniCloud.httpclient.request('https://api.ipify.org?format=json', {
+      dataType: 'json',
+      timeout: 5000
+    })
+    return (r.data && r.data.ip) || ''
+  } catch (e) {
+    return ''
+  }
+}
+
+/** 用户小程序 openid：uni-id 存在 wx_openid 对象里，key 形如 mp-weixin_wx... */
+async function openidOf(uid) {
+  try {
+    const res = await C.db.collection('uni-id-users').doc(uid).get()
+    const u = res.data && res.data[0]
+    const map = (u && u.wx_openid) || {}
+    const keys = Object.keys(map)
+    const hit = keys.find((k) => String(k).indexOf('mp-weixin') === 0) || keys[0]
+    const v = hit ? map[hit] : ''
+    return typeof v === 'string' ? v : ''
+  } catch (e) {
+    return ''
+  }
+}
+
+async function wxTransfer(body) {
+  const res = await wxRequest('POST', TRANSFER_PATH, body)
+  return { status: res.status, data: res.data || {} }
+}
+
+async function wxQueryTransfer(outBillNo) {
+  const res = await wxRequest(
+    'GET',
+    `${TRANSFER_PATH}/out-bill-no/${encodeURIComponent(outBillNo)}?mchid=${PAY_CONFIG.mchid}`
+  )
+  return { status: res.status, data: res.data || {} }
+}
+
+/** 转账失败时把提现冲正：余额加回去、累计已提现减掉、补一条退回流水 */
+async function rollbackWithdraw(uid, amountCent, reason) {
+  await C.db.collection(C.COLL.wallets).doc(uid).update({
+    balance_cent: C.dbCmd.inc(amountCent),
+    withdrawn_cent: C.dbCmd.inc(-amountCent),
+    update_time: Date.now()
+  })
+  await C.db.collection(C.COLL.transactions).add(
+    C.txDoc({
+      type: C.TX_TYPE.WITHDRAW,
+      uid,
+      taskId: '',
+      amountCent,
+      remark: `提现失败退回：${String(reason || '转账失败').slice(0, 20)}`,
+      key: `withdraw-rollback:${uid}:${Date.now()}`
+    })
+  )
+}
+
 const api = {
+
   /** 支付模式探测，客户端用它决定显示「微信支付」还是「模拟支付」 */
   async getPayMode() {
     return C.ok({ mode: isRealPay() ? 'wechat' : 'mock' })
+  },
+
+  /**
+   * 提现：直接打款到用户微信零钱（商家转账 · 佣金报酬场景）。
+   *
+   * 流程：校验 → 扣余额 → 调微信转账 → 需要用户在微信里确认收款 → 轮询/回调更新状态。
+   * 转账请求失败或返回 FAIL 时，自动把余额/累计已提现冲正，避免「扣了钱没到账」。
+   */
+  async requestWithdraw(data = {}) {
+    const auth = await C.requireAuth(this)
+    await C.checkNonce(auth, data.nonce, data.timestamp)
+    const profile = await C.ensureProfile(auth.uid)
+    C.assert((profile.rider_status || 0) === 2, 403, '骑手认证通过后才能提现')
+
+    const amountCent = Math.round(Number(data.amount) * 100)
+    C.assert(Number.isFinite(amountCent) && amountCent > 0, 400, '提现金额不合法')
+    const s = C.S()
+    const minCent = Math.round(s.minWithdrawYuan * 100)
+    C.assert(amountCent >= minCent, 400, `提现金额不能低于 ${s.minWithdrawYuan} 元`)
+    C.assert(amountCent <= 20000, 400, '单笔最多提现 200 元，可分几次提')
+
+    const since = todayStart()
+    const todayRes = await C.db
+      .collection(C.COLL.transactions)
+      .where({ user_id: auth.uid, type: C.TX_TYPE.WITHDRAW, create_time: C.dbCmd.gte(since) })
+      .orderBy('create_time', 'desc')
+      .get()
+    const todayTx = todayRes.data || []
+    C.assert(todayTx.length < 5, 400, '每天最多提现 5 次，明天再来')
+    const todayCent = todayTx.reduce((sum, t) => sum + Math.abs(Number(t.amount_cent) || 0), 0)
+    C.assert(todayCent + amountCent <= 50000, 400, '单日累计提现上限 500 元')
+    if (todayTx.length) {
+      const last = Number(todayTx[0].create_time) || 0
+      const wait = 10 * 60 * 1000 - (Date.now() - last)
+      if (wait > 0) throw new C.BizError(400, `刚提过一次，请 ${Math.ceil(wait / 60000)} 分钟后再试`)
+    }
+
+    let wallet = await C.ensureWallet(auth.uid)
+    const frozen = Number(wallet.frozen_cent) || 0
+    if (frozen > 0) {
+      await C.db
+        .collection(C.COLL.wallets)
+        .doc(auth.uid)
+        .update({ balance_cent: C.dbCmd.inc(frozen), frozen_cent: 0, update_time: Date.now() })
+      wallet = { ...wallet, balance_cent: Number(wallet.balance_cent) + frozen, frozen_cent: 0 }
+    }
+    C.assert(Number(wallet.balance_cent) >= amountCent, 400, '余额不足')
+
+    const openid = await openidOf(auth.uid)
+    C.assert(openid, 400, '缺少微信 openid，请退出小程序重新登录后再试')
+
+    const outBillNo = 'WD' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+    const upd = await C.db
+      .collection(C.COLL.wallets)
+      .where({ _id: auth.uid, balance_cent: C.dbCmd.gte(amountCent) })
+      .update({
+        balance_cent: C.dbCmd.inc(-amountCent),
+        withdrawn_cent: C.dbCmd.inc(amountCent),
+        update_time: Date.now()
+      })
+    C.assert(upd.updated === 1, 409, '余额已变化，请刷新')
+
+    await C.db.collection(C.COLL.transactions).add(
+      C.txDoc({
+        type: C.TX_TYPE.WITHDRAW,
+        uid: auth.uid,
+        taskId: '',
+        amountCent: -amountCent,
+        remark: '提现到微信零钱（商家转账）',
+        key: `withdraw:${auth.uid}:${outBillNo}`
+      })
+    )
+
+    let r
+    try {
+      r = await wxTransfer(transferBody({ openid, amountCent, outBillNo }))
+    } catch (e) {
+      const ip = await egressIp()
+      await rollbackWithdraw(auth.uid, amountCent, '网络异常')
+      throw new C.BizError(500, `微信转账请求失败${ip ? '（出口IP ' + ip + '）' : ''}，金额已退回，请稍后再试`)
+    }
+
+    const d = r.data || {}
+    const state = d.state || ''
+    if (r.status !== 200 || state === 'FAIL') {
+      const ip = await egressIp()
+      await rollbackWithdraw(auth.uid, amountCent, d.fail_reason || d.message || '转账失败')
+      const reason = d.message || d.fail_reason || `HTTP ${r.status}`
+      throw new C.BizError(
+        400,
+        `微信转账失败：${reason}${ip ? '（出口IP ' + ip + '）' : ''}。${TRANSFER_IP_WHITELIST_HINT}`
+      )
+    }
+
+    const after = await C.ensureWallet(auth.uid)
+    return C.ok(
+      {
+        amount: C.yuan(amountCent),
+        balance: C.yuan(after.balance_cent),
+        out_bill_no: outBillNo,
+        state,
+        package_info: d.package_info || '',
+        mchid: PAY_CONFIG.mchid || '',
+        appid: PAY_CONFIG.appid || '',
+        need_confirm: state === 'WAIT_USER_CONFIRM'
+      },
+      state === 'WAIT_USER_CONFIRM' ? '请在微信里确认收款' : '提现成功'
+    )
+  },
+
+  /** 查询提现转账状态（用户确认收款后轮询用） */
+  async queryWithdraw(outBillNo) {
+    await C.requireAuth(this)
+    const no = C.str(outBillNo, { min: 6, max: 64, name: '提现单号', required: true })
+    const r = await wxQueryTransfer(no)
+    const d = r.data || {}
+    return C.ok({
+      state: d.state || '',
+      fail_reason: d.fail_reason || '',
+      transfer_bill_no: d.transfer_bill_no || ''
+    })
   },
 
   /**

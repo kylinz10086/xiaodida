@@ -93,7 +93,7 @@
 		onShow() { this.load() },
 		onPullDownRefresh() { this.load().finally(() => uni.stopPullDownRefresh()) },
 		methods: {
-			...mapActions('rider', ['fetchWallet', 'requestWithdraw']),
+			...mapActions('rider', ['fetchWallet', 'requestWithdraw', 'queryWithdraw']),
 
 			money(n) {
 				const num = Number(n) || 0
@@ -141,21 +141,91 @@
 				this.submitting = true
 				try {
 					const res = await this.requestWithdraw(n)
-					const left = (res && res.data && res.data.balance) || 0
-					uni.showModal({
-						title: '提现成功',
-						content: `¥${n.toFixed(2)} 已自动处理，剩余可提现 ¥${Number(left).toFixed(2)}。`,
-						showCancel: false,
-						confirmText: '知道了',
-						confirmColor: '#007AFF'
-					})
+					const d = (res && res.data) || {}
 					this.amount = ''
+
+					if (d.need_confirm && d.package_info) {
+						const ok = await this.confirmTransfer(d)
+						if (!ok) {
+							uni.showModal({
+								title: '还没确认收款',
+								content: '微信里需要点一下「确认收款」才会到账。可以重新发起提现再确认一次。',
+								showCancel: false
+							})
+							await this.load()
+							return
+						}
+						const state = await this.pollWithdraw(d.out_bill_no)
+						if (state === 'SUCCESS') {
+							uni.showModal({
+								title: '提现成功',
+								content: `¥${n.toFixed(2)} 已到账微信零钱。`,
+								showCancel: false
+							})
+						} else if (state === 'FAIL') {
+							uni.showModal({
+								title: '提现失败',
+								content: '微信转账失败，金额已退回余额，请稍后再试。',
+								showCancel: false
+							})
+						} else {
+							uni.showModal({
+								title: '处理中',
+								content: '微信正在处理这笔转账，稍后可在微信零钱账单里查看。',
+								showCancel: false
+							})
+						}
+					} else {
+						uni.showModal({
+							title: '提现成功',
+							content: `¥${n.toFixed(2)} 已到账微信零钱，剩余可提现 ¥${Number(d.balance || 0).toFixed(2)}。`,
+							showCancel: false,
+							confirmText: '知道了',
+							confirmColor: '#007AFF'
+						})
+					}
 					await this.load()
 				} catch (e) {
 					uni.showToast({ title: errText(e, '提现失败'), icon: 'none' })
 				} finally {
 					this.submitting = false
 				}
+			},
+
+			/** 拉起微信「确认收款」页（商家转账用户确认模式） */
+			confirmTransfer(d) {
+				return new Promise((resolve) => {
+					if (typeof wx === 'undefined' || typeof wx.requestMerchantTransfer !== 'function') {
+						uni.showModal({
+							title: '微信版本过低',
+							content: '当前微信不支持确认收款，请升级微信后再试。',
+							showCancel: false
+						})
+						return resolve(false)
+					}
+					wx.requestMerchantTransfer({
+						mchId: d.mchid || '',
+						appId: d.appid || '',
+						package: d.package_info,
+						success: () => resolve(true),
+						fail: () => resolve(false)
+					})
+				})
+			},
+
+			/** 确认收款后轮询转账状态 */
+			async pollWithdraw(no) {
+				if (!no) return ''
+				for (let i = 0; i < 8; i++) {
+					await new Promise((r) => setTimeout(r, 1500))
+					try {
+						const d = await this.queryWithdraw(no)
+						if (d.state === 'SUCCESS' || d.state === 'FAIL') return d.state
+					} catch (e) {
+						// 继续轮询
+					}
+				}
+				return ''
 			}
 		}
 	}

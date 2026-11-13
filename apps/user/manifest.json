@@ -2,8 +2,8 @@
     "name" : "校递达",
     "appid" : "__UNI__1808C67",
     "description" : "校递达 —— 校园快递代取 / 代带餐食互助小程序",
-    "versionName" : "1.9.11",
-    "versionCode" : "1911",
+    "versionName" : "1.10.0",
+    "versionCode" : "1100",
     "transformPx" : false,
     "app-plus" : {
         "optimization" : {

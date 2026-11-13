@@ -468,104 +468,9 @@ const api = {
    *   4. 每笔都写 transactions 流水（type=withdraw），后台可按流水核查。
    * 历史遗留的 frozen_cent（旧审核单）会在下一次提现时退回余额，避免钱卡死。
    */
-  async requestWithdraw(data = {}) {
-    const auth = await C.requireAuth(this)
-    await C.checkNonce(auth, data.nonce, data.timestamp)
-
-    const profile = await C.ensureProfile(auth.uid)
-    C.assert((profile.rider_status || 0) === 2, 403, '骑手认证通过后才能提现')
-
-    const amountYuan = Number(data.amount)
-    const amountCent = Math.round(amountYuan * 100)
-    C.assert(Number.isFinite(amountCent) && amountCent > 0, 400, '提现金额不合法')
-
-    const s = C.S()
-    const minCent = Math.round(s.minWithdrawYuan * 100)
-    C.assert(amountCent >= minCent, 400, `提现金额不能低于 ${s.minWithdrawYuan} 元`)
-    C.assert(amountCent <= WITHDRAW_MAX_YUAN * 100, 400, `单笔最多提现 ${WITHDRAW_MAX_YUAN} 元，可分几次提`)
-
-    // 单日次数 + 两次提现冷却：都从流水里算，不额外建表
-    const since = todayStart()
-    const todayRes = await C.db
-      .collection(C.COLL.transactions)
-      .where({ user_id: auth.uid, type: C.TX_TYPE.WITHDRAW, create_time: C.dbCmd.gte(since) })
-      .orderBy('create_time', 'desc')
-      .get()
-    const todayTx = todayRes.data || []
-    C.assert(todayTx.length < WITHDRAW_DAILY_COUNT, 400, `每天最多提现 ${WITHDRAW_DAILY_COUNT} 次，明天再来`)
-
-    const todayCent = todayTx.reduce((sum, t) => sum + Math.abs(Number(t.amount_cent) || 0), 0)
-    C.assert(todayCent + amountCent <= WITHDRAW_DAILY_YUAN * 100, 400, `单日累计提现上限 ${WITHDRAW_DAILY_YUAN} 元`)
-
-    if (todayTx.length) {
-      const last = Number(todayTx[0].create_time) || 0
-      const wait = WITHDRAW_COOLDOWN_MS - (Date.now() - last)
-      if (wait > 0) {
-        throw new C.BizError(400, `刚提过一次，请 ${Math.ceil(wait / 60000)} 分钟后再试`)
-      }
-    }
-
-    let wallet = await C.ensureWallet(auth.uid)
-
-    // 旧版人工审核遗留下来的冻结金额：没有审核接口等于取不出来，这里一次性退回余额
-    const frozen = Number(wallet.frozen_cent) || 0
-    if (frozen > 0) {
-      await C.db.collection(C.COLL.wallets).doc(auth.uid).update({
-        balance_cent: C.dbCmd.inc(frozen),
-        frozen_cent: 0,
-        update_time: Date.now()
-      })
-      await C.db.collection(C.COLL.transactions).add(
-        C.txDoc({
-          type: C.TX_TYPE.WITHDRAW,
-          uid: auth.uid,
-          taskId: '',
-          amountCent: frozen,
-          remark: '历史提现退回（旧审核单）',
-          key: `withdraw-release:${auth.uid}:${Date.now()}`
-        })
-      )
-      wallet = {
-        ...wallet,
-        balance_cent: Number(wallet.balance_cent) + frozen,
-        frozen_cent: 0
-      }
-    }
-
-    C.assert(Number(wallet.balance_cent) >= amountCent, 400, '余额不足')
-
-    // CAS 扣款：并发提现时只有一次能成功
-    const upd = await C.db
-      .collection(C.COLL.wallets)
-      .where({ _id: auth.uid, balance_cent: C.dbCmd.gte(amountCent) })
-      .update({
-        balance_cent: C.dbCmd.inc(-amountCent),
-        withdrawn_cent: C.dbCmd.inc(amountCent),
-        update_time: Date.now()
-      })
-    C.assert(upd.updated === 1, 409, '余额已变化，请刷新')
-
-    await C.db.collection(C.COLL.transactions).add(
-      C.txDoc({
-        type: C.TX_TYPE.WITHDRAW,
-        uid: auth.uid,
-        taskId: '',
-        amountCent: -amountCent,
-        remark: '提现到微信零钱（自动）',
-        key: `withdraw:${auth.uid}:${Date.now()}`
-      })
-    )
-
-    // 重新读一次钱包，返回客户端最新余额（不要用扣款前的快照去算）
-    const after = await C.ensureWallet(auth.uid)
-    return C.ok(
-      {
-        amount: C.yuan(amountCent),
-        balance: C.yuan(after.balance_cent),
-        auto: true
-      },
-      '提现成功，已自动处理'
-    )
+  /** 提现已迁到 xyyx-pay（要调微信商家转账，支付证书在那边）；旧客户端走这里只会被拒绝，避免重复扣钱 */
+  async requestWithdraw() {
+    throw new C.BizError(400, '提现功能已升级，请更新到最新版小程序后再试')
   },
 
   /* ---------------- 图片上传 ---------------- */
@@ -582,10 +487,10 @@ const api = {
    * 客户端 <image> 依赖 downloadFile 域名白名单，云存储域名没配就裂图；
    * 这里让云函数把图取回来，客户端用 data URI 显示 / 预览。
    */
-  async getImageData(fileID) {
+  async getImageData(fileID, offset = 0) {
     const auth = await C.requireAuth(this)
-    await C.rateLimit(auth, 'image', 120, 60 * 1000)
-    return C.ok(await C.imageDataOf(fileID), 'ok')
+    await C.rateLimit(auth, 'image', 600, 60 * 1000)
+    return C.ok(await C.imageDataOf(fileID, offset), 'ok')
   },
 
   /* ---------------- 订单内聊天 ---------------- */
