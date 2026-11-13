@@ -409,8 +409,33 @@ async function wxTransfer(body) {
         : { state: 'FAIL', fail_reason: '测试模拟转账失败' }
     }
   }
-  const res = await wxRequest('POST', TRANSFER_PATH, body)
-  return { status: res.status, data: res.data || {} }
+
+  // 不同商户开通的商家转账产品版本，对「可选参数」支持不一样。
+  // 遇到「请求中含有未在API文档中定义的参数」（PARAM_ERROR）时，
+  // 按可选字段从多到少依次重试 —— 同一 out_bill_no 重试是微信允许的，
+  // 参数错误不会产生转账单，所以这样试是安全的。
+  const variants = []
+  const v1 = Object.assign({}, body)
+  const v2 = Object.assign({}, body)
+  delete v2.user_recv_perception
+  const v3 = Object.assign({}, v2)
+  delete v3.transfer_scene_report_infos
+  variants.push(v1, v2, v3)
+
+  let last = null
+  for (let i = 0; i < variants.length; i++) {
+    const res = await wxRequest('POST', TRANSFER_PATH, variants[i])
+    last = res
+    const code = String((res.data && res.data.code) || '')
+    const msg = String((res.data && res.data.message) || '')
+    const paramErr = code === 'PARAM_ERROR' || /未在API文档中定义|参数错误|参数不正确/.test(msg)
+    if (!paramErr) {
+      // 记下哪一档可用：wx_variant=1 完整 / 2 去掉收款感知 / 3 再去掉报备信息
+      if (res.data && typeof res.data === 'object') res.data.wx_variant = i + 1
+      return res
+    }
+  }
+  return last
 }
 
 async function wxQueryTransfer(outBillNo) {
@@ -504,7 +529,13 @@ async function applyTransferState(doc, data, httpStatus) {
   const billNo = (data && data.transfer_bill_no) || ''
 
   if (state === 'SUCCESS') {
-    await wdPatch(no, { state: 'SUCCESS', transfer_bill_no: billNo, fail_reason: '', finish_time: Date.now() })
+    await wdPatch(no, {
+      state: 'SUCCESS',
+      transfer_bill_no: billNo,
+      fail_reason: '',
+      finish_time: Date.now(),
+      wx_variant: Number((data && data.wx_variant) || 0)
+    })
     return 'SUCCESS'
   }
 
@@ -597,8 +628,13 @@ async function issueTransfer({ uid, amountCent, outBillNo, openid, source, reuse
   const okState = state !== 'FAIL' && state !== 'CANCELLED' && state !== 'EXPIRED'
   if (!okState) {
     const ip = await egressIp()
-    // 记下这次用的出口 IP：后台能直接看到「该加白名单的是哪个 IP」
-    await wdPatch(outBillNo, { egress_ip: ip })
+    // 记下这次用的出口 IP + 微信原始返回：后台能直接看到「该加白名单的是哪个 IP」，
+    // 参数类报错也能看到 wechat 的 detail（哪个字段不合法），不用再猜
+    await wdPatch(outBillNo, {
+      egress_ip: ip,
+      wx_code: d.code || '',
+      wx_resp: JSON.stringify(d).slice(0, 600)
+    })
     const reason = d.message || d.fail_reason || `HTTP ${r.status}`
     const err = new C.BizError(
       400,
@@ -690,8 +726,9 @@ const api = {
     C.assert(todayCent + amountCent <= 50000, 400, '单日累计提现上限 500 元')
     if (todayTx.length) {
       const last = Number(todayTx[0].create_time) || 0
-      const wait = 10 * 60 * 1000 - (Date.now() - last)
-      if (wait > 0) throw new C.BizError(400, `刚提过一次，请 ${Math.ceil(wait / 60000)} 分钟后再试`)
+      // 两次提现间隔 1 分钟（1.11.8 起从 10 分钟放宽，配合每天 20 次）
+      const wait = 60 * 1000 - (Date.now() - last)
+      if (wait > 0) throw new C.BizError(400, `刚提过一次，请 ${Math.ceil(wait / 1000)} 秒后再试`)
     }
 
     let wallet = await C.ensureWallet(auth.uid)

@@ -31,7 +31,7 @@ function eq(actual, expect, label) {
   ok(actual === expect, label, { actual, expect })
 }
 
-const MIN = 600000 // 10 分钟冷却
+const MIN = 60000 // 1 分钟冷却
 
 async function main() {
   const env = createEnv({ uid: 'rider-1' })
@@ -97,7 +97,7 @@ async function main() {
 
   console.log('\n[4] 冷却：刚提过不能马上再提')
   const again = await call(payObj.requestWithdraw, { amount: 3, ...meta() })
-  eq(again.code, 400, '10 分钟内第二次被拒')
+  eq(again.code, 400, '1 分钟内第二次被拒')
 
   console.log('\n[5] 单日累计上限 500 元')
   // 造两条 11 分钟前的提现流水：次数没超、冷却已过，但累计 300 元
