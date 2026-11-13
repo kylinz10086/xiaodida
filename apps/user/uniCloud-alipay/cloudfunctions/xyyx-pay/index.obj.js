@@ -547,8 +547,11 @@ async function applyTransferState(doc, data, httpStatus) {
 /**
  * 真正发起一笔转账：登记提现单 → 调微信 → 落状态。
  * requestWithdraw（用户发起）和 adminReissueWithdraw（后台重发）共用。
+ *
+ * reuse=true 表示复用原来那张提现单号（微信要求：资金不足等可重试的失败要「原单号重试」，
+ * 换单号会让微信那边多出一笔记录，也容易对不上账）。
  */
-async function issueTransfer({ uid, amountCent, outBillNo, openid, source }) {
+async function issueTransfer({ uid, amountCent, outBillNo, openid, source, reuse }) {
   const now = Date.now()
   const doc = {
     _id: outBillNo,
@@ -562,7 +565,20 @@ async function issueTransfer({ uid, amountCent, outBillNo, openid, source }) {
     create_time: now,
     update_time: now
   }
-  await wdAdd(doc)
+
+  if (reuse) {
+    const old = await wdGet(outBillNo)
+    doc.create_time = (old && old.create_time) || now
+    await wdPatch(outBillNo, {
+      state: 'pending',
+      rolled_back: false,
+      fail_reason: '',
+      transfer_bill_no: '',
+      retry_count: (Number(old && old.retry_count) || 0) + 1
+    })
+  } else {
+    await wdAdd(doc)
+  }
 
   let r
   try {

@@ -67,7 +67,7 @@
 
 			<view class="tx" v-for="t in wallet.transactions" :key="t._id">
 				<view class="tx-left">
-					<text class="tx-remark">{{ t.remark || txTypeText(t.type) }}</text>
+					<text class="tx-remark">{{ remarkText(t) }}</text>
 					<text class="tx-time">{{ formatTime(t.create_time) }} · {{ txTypeText(t.type) }}</text>
 				</view>
 				<text class="tx-amount" :class="{ plus: t.amount > 0 }">{{ t.amount > 0 ? '+' : '' }}{{ money(t.amount) }}</text>
@@ -79,8 +79,6 @@
 				<text class="empty-tip">完成第一单后，收入会显示在这里</text>
 			</view>
 		</view>
-
-		<view class="foot-note">平台抽佣 {{ commissionPercent }}%，骑手到手 = 订单金额 × {{ 100 - commissionPercent }}%</view>
 	</view>
 </template>
 
@@ -101,11 +99,7 @@
 			}
 		},
 		computed: {
-			...mapGetters('rider', ['wallet', 'commissionRate']),
-			/** 抽佣比例来自配置表，别写死百分比 */
-			commissionPercent() {
-				return Math.round((Number(this.commissionRate) || 0) * 100)
-			},
+			...mapGetters('rider', ['wallet']),
 			quickAmounts() {
 				const balance = Number(this.wallet.balance) || 0
 				const list = [1, 3, 5, 10].filter((n) => n <= balance)
@@ -147,6 +141,16 @@
 					escrow_in: '托管入账',
 					escrow_out: '托管出账'
 				}[type] || type || '其他'
+			},
+
+			/**
+			 * 明细备注：老数据里写着「完成订单收入（已扣平台佣金 x 元）」，
+			 * 这里统一去掉括号里的佣金说明，新数据服务端也不再拼这一段。
+			 */
+			remarkText(t) {
+				const raw = String((t && t.remark) || '')
+				const clean = raw.replace(/（已扣平台佣金[^）]*）/g, '').trim()
+				return clean || this.txTypeText(t && t.type)
 			},
 
 			formatTime(ts) {

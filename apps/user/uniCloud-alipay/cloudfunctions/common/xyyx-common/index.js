@@ -910,7 +910,7 @@ async function settleTask(task, operatorUid) {
         uid: task.runner_id,
         taskId: task._id,
         amountCent: riderIncome,
-        remark: `完成订单收入（已扣平台佣金 ${yuan(commission)} 元）`,
+        remark: '完成订单收入',
         key: `income:${task._id}`
       })
     ),
