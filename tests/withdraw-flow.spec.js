@@ -171,12 +171,27 @@ async function main() {
     '补了一条退回流水'
   )
 
-  // 定时任务再同步一次，不能重复加钱
+  // 定时任务再对账：微信那边其实是成功的 → 自动纠正成「已到账」，并把误退的钱扣回来
   process.env.XYYX_WITHDRAW_MOCK = 'success'
-  await call(payObj.syncWithdrawals)
-  eq(get('xyyx-wallets', 'rider-1').balance_cent, 5000, '同步后余额没有被重复加钱')
+  const syncRes = await call(payObj.syncWithdrawals)
+  eq(syncRes.code, 0, '定时对账执行成功')
+  eq(get('xyyx-wallets', 'rider-1').balance_cent, 5000 - 400, '自动对账后把误退的 4 元扣回')
+  eq(get('xyyx-withdrawals', failDoc._id).state, 'SUCCESS', '失败单被自动纠正为已到账')
+  ok(
+    Array.from(coll('xyyx-transactions').values()).some(
+      (t) => t.type === 'withdraw' && t.amount_cent === -400 && /对账补扣/.test(t.remark || '')
+    ),
+    '补了一条对账补扣流水'
+  )
 
   console.log('\n[9] 后台重发：必须沿用原单号（微信：请勿更换商户单号）')
+  // 再制造一笔「真失败」的单子（微信侧确实没到账）
+  process.env.XYYX_WITHDRAW_MOCK = 'fail'
+  for (const tx of coll('xyyx-transactions').values()) {
+    if (tx.type === 'withdraw') tx.create_time = Date.now() - MIN - 5000
+  }
+  get('xyyx-wallets', 'rider-1').balance_cent = 10000
+  await call(payObj.requestWithdraw, { amount: 4, ...meta() })
   const failedDoc = Array.from(coll('xyyx-withdrawals').values()).find((d) => d.state === 'FAIL')
   ok(!!failedDoc, '有可重发的失败单')
   const w5 = get('xyyx-wallets', 'rider-1')

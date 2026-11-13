@@ -323,6 +323,14 @@ function transferRemark(text) {
   return String(text || '跑腿收入提现').slice(0, 32)
 }
 
+/**
+ * 发起转账的请求体。
+ *
+ * 只放微信文档里明确列出的字段：多一个未定义字段就会整笔报
+ * 「请求中含有未在API文档中定义的参数」（PARAM_ERROR），
+ * 而 `user_recv_perception` 这类字段并不是所有「商家转账」产品版本都认，
+ * 所以默认不传（需要时由 wxTransfer 的降级重试再补上）。
+ */
 function transferBody({ openid, amountCent, outBillNo }) {
   return {
     appid: PAY_CONFIG.appid,
@@ -331,7 +339,6 @@ function transferBody({ openid, amountCent, outBillNo }) {
     openid,
     transfer_amount: amountCent,
     transfer_remark: transferRemark('校递达跑腿报酬'),
-    user_recv_perception: '劳务报酬',
     transfer_scene_report_infos: [
       { info_type: '岗位类型', info_content: '校园跑腿骑手' },
       { info_type: '报酬说明', info_content: '跑腿订单收入提现' }
@@ -410,16 +417,17 @@ async function wxTransfer(body) {
     }
   }
 
-  // 不同商户开通的商家转账产品版本，对「可选参数」支持不一样。
-  // 遇到「请求中含有未在API文档中定义的参数」（PARAM_ERROR）时，
-  // 按可选字段从多到少依次重试 —— 同一 out_bill_no 重试是微信允许的，
-  // 参数错误不会产生转账单，所以这样试是安全的。
+  // 不同商户开通的「商家转账」产品版本，对可选参数支持不一样。
+  // 默认用最小可用字段集；万一还是报「未在API文档中定义的参数」，按下列顺序换档重试：
+  //   1) 最小集（当前 body）
+  //   2) 再去掉场景报备信息
+  //   3) 补上 user_recv_perception（部分新版本才认）
   const variants = []
   const v1 = Object.assign({}, body)
   const v2 = Object.assign({}, body)
-  delete v2.user_recv_perception
-  const v3 = Object.assign({}, v2)
-  delete v3.transfer_scene_report_infos
+  delete v2.transfer_scene_report_infos
+  const v3 = Object.assign({}, body)
+  v3.user_recv_perception = '劳务报酬'
   variants.push(v1, v2, v3)
 
   let last = null
@@ -461,9 +469,12 @@ async function wxQueryTransfer(outBillNo) {
           : { state: 'SUCCESS', transfer_bill_no: 'mock_' + outBillNo, out_bill_no: outBillNo }
     }
   }
+  // 查询转账单：文档里只有 path 参数 out_bill_no，**不能带 ?mchid=**
+  // （带了会直接报「请求中含有未在API文档中定义的参数」PARAM_ERROR，
+  //   表现就是「对账永远查不到微信状态」。商户身份由签名头里的 mchid 决定。）
   const res = await wxRequest(
     'GET',
-    `${TRANSFER_PATH}/out-bill-no/${encodeURIComponent(outBillNo)}?mchid=${PAY_CONFIG.mchid}`
+    `${TRANSFER_PATH}/out-bill-no/${encodeURIComponent(outBillNo)}`
   )
   return { status: res.status, data: res.data || {} }
 }
@@ -736,6 +747,60 @@ async function issueTransfer({ uid, amountCent, outBillNo, openid, source, reuse
   return { state, data: d, outBillNo }
 }
 
+/**
+ * 把一笔「本地记成失败、但微信其实已到账」的提现改平。
+ * 之前误退过余额就把多退的扣回来（扣不动就标记人工核账）。
+ * 自动对账（cron）和后台人工纠正（markWithdrawPaid）共用这一段，保证两条路算账一致。
+ */
+async function healToPaid(doc, operator) {
+  const no = doc._id
+  const amountCent = Number(doc.amount_cent) || 0
+  let recharged = false
+
+  if (doc.rolled_back) {
+    try {
+      const upd = await C.db
+        .collection(C.COLL.wallets)
+        .where({ _id: doc.user_id, balance_cent: C.dbCmd.gte(amountCent) })
+        .update({
+          balance_cent: C.dbCmd.inc(-amountCent),
+          withdrawn_cent: C.dbCmd.inc(amountCent),
+          update_time: Date.now()
+        })
+      recharged = Boolean(upd && upd.updated)
+    } catch (e) {
+      recharged = false
+    }
+    if (recharged) {
+      try {
+        await C.db.collection(C.COLL.transactions).add(
+          C.txDoc({
+            type: C.TX_TYPE.WITHDRAW,
+            uid: doc.user_id,
+            taskId: '',
+            amountCent: -amountCent,
+            remark: '提现对账补扣（钱已到账，撤回误退）',
+            key: `withdraw-reconcile:${no}`
+          })
+        )
+      } catch (e) {}
+    }
+  }
+
+  await wdPatch(no, {
+    state: 'SUCCESS',
+    rolled_back: recharged ? false : Boolean(doc.rolled_back),
+    fail_reason: recharged ? '' : doc.rolled_back ? '已到账，但余额不足以撤回误退，需人工核账' : doc.fail_reason || '',
+    manual_paid: Boolean(operator),
+    manual_by: operator || '',
+    reconciled: true,
+    manual_time: Date.now(),
+    finish_time: Date.now()
+  })
+
+  return recharged
+}
+
 /** 提现单对外的样子（客户端/后台共用，不暴露内部字段） */
 function wdPub(d) {
   const amount = Number(d.amount_cent) || 0
@@ -941,59 +1006,13 @@ const api = {
       return C.ok({ state: ps || 'FAIL', fixed: false, recharged: false }, '微信侧确认这笔没有到账')
     }
 
-    // 微信侧确实有单：之前如果误退过，把多退的钱扣回来
-    if (doc.rolled_back) {
-      const amountCent = Number(doc.amount_cent) || 0
-      let deducted = false
-      try {
-        const upd = await C.db
-          .collection(C.COLL.wallets)
-          .where({ _id: doc.user_id, balance_cent: C.dbCmd.gte(amountCent) })
-          .update({
-            balance_cent: C.dbCmd.inc(-amountCent),
-            withdrawn_cent: C.dbCmd.inc(amountCent),
-            update_time: Date.now()
-          })
-        deducted = Boolean(upd && upd.updated)
-      } catch (e) {
-        deducted = false
-      }
-
-      if (deducted) {
-        try {
-          await C.db.collection(C.COLL.transactions).add(
-            C.txDoc({
-              type: C.TX_TYPE.WITHDRAW,
-              uid: doc.user_id,
-              taskId: '',
-              amountCent: -amountCent,
-              remark: '提现对账补扣（钱已到账，撤回误退）',
-              key: `withdraw-reconcile:${no}`
-            })
-          )
-        } catch (e) {}
-        await wdPatch(no, {
-          state: ps,
-          rolled_back: false,
-          fail_reason: '',
-          transfer_bill_no: billNo,
-          reconciled: true,
-          finish_time: ps === 'SUCCESS' ? Date.now() : doc.finish_time || 0
-        })
-        return C.ok({ state: ps, fixed: true, recharged: true }, '已对账：钱确实到账，已撤回误退的余额')
-      }
-
-      await wdPatch(no, {
-        state: ps,
-        fail_reason: '已到账，但余额不足无法撤回误退，需人工核账',
-        transfer_bill_no: billNo,
-        reconciled: true
-      })
-      return C.ok({ state: ps, fixed: true, recharged: false }, '已到账；余额不足，需人工核账')
-    }
-
-    await wdPatch(no, { state: ps, fail_reason: '', transfer_bill_no: billNo, reconciled: true })
-    return C.ok({ state: ps, fixed: true, recharged: false }, '已按微信状态更新')
+    // 微信侧确实有单：统一走 healToPaid（和定时任务自动对账用的是同一段算账逻辑）
+    const recharged = await healToPaid(doc, '')
+    await wdPatch(no, { transfer_bill_no: billNo, state: ps })
+    return C.ok(
+      { state: ps, fixed: true, recharged },
+      recharged ? '已对账：钱确实到账，已撤回误退的余额' : '已对账：已按微信状态更新'
+    )
   },
 
   /** 我的提现记录（钱包页显示最近几笔的状态） */
@@ -1033,48 +1052,7 @@ const api = {
       return C.ok({ state: 'SUCCESS', recharged: false }, '这笔已经是已到账状态')
     }
 
-    const amountCent = Number(doc.amount_cent) || 0
-    let recharged = false
-    if (doc.rolled_back) {
-      try {
-        const upd = await C.db
-          .collection(C.COLL.wallets)
-          .where({ _id: doc.user_id, balance_cent: C.dbCmd.gte(amountCent) })
-          .update({
-            balance_cent: C.dbCmd.inc(-amountCent),
-            withdrawn_cent: C.dbCmd.inc(amountCent),
-            update_time: Date.now()
-          })
-        recharged = Boolean(upd && upd.updated)
-      } catch (e) {
-        recharged = false
-      }
-      if (recharged) {
-        try {
-          await C.db.collection(C.COLL.transactions).add(
-            C.txDoc({
-              type: C.TX_TYPE.WITHDRAW,
-              uid: doc.user_id,
-              taskId: '',
-              amountCent: -amountCent,
-              remark: '提现人工对账（钱已到账，撤回误退）',
-              key: `withdraw-manualpaid:${no}`
-            })
-          )
-        } catch (e) {}
-      }
-    }
-
-    await wdPatch(no, {
-      state: 'SUCCESS',
-      rolled_back: recharged ? false : Boolean(doc.rolled_back),
-      fail_reason: recharged ? '' : doc.rolled_back ? '已到账，但余额不足以撤回误退，需人工核账' : doc.fail_reason || '',
-      manual_paid: true,
-      manual_by: String((data && data.operator) || ''),
-      manual_time: Date.now(),
-      finish_time: Date.now()
-    })
-
+    const recharged = await healToPaid(doc, String((data && data.operator) || ''))
     return C.ok(
       { state: 'SUCCESS', recharged },
       recharged ? '已标记为已到账，并撤回之前误退的余额' : '已标记为已到账（余额不足，误退部分需人工核账）'
@@ -1117,7 +1095,37 @@ const api = {
     } catch (e) {
       console.warn('[xyyx-pay] 同步提现状态失败', e && e.message)
     }
-    return C.ok({ scanned: scanned.n, updated: scanned.updated })
+
+    // ---- 第二遍：自动对账「本地记成失败、但微信其实已到账」的单子 ----
+    // 之前出过「接口报参数错误 → 当失败 → 余额退回，但钱已经打出去了」，
+    // 这类单子必须由定时任务自动纠正，不能指望人工一笔笔点。
+    let healed = 0
+    try {
+      const failRes = await C.db
+        .collection(C.COLL.withdrawals)
+        .where({
+          state: C.dbCmd.in(['FAIL', 'CANCELLED', 'EXPIRED']),
+          rolled_back: true,
+          create_time: C.dbCmd.gt(Date.now() - 7 * 86400000)
+        })
+        .orderBy('create_time', 'desc')
+        .limit(10)
+        .get()
+      for (const doc of failRes.data || []) {
+        if (doc.reconciled) continue
+        const probe = await probeBillState(doc._id)
+        if (!probe.known || !probe.exists) continue
+        const ps = probe.state
+        if (ps === 'SUCCESS' || WD_IN_FLIGHT.indexOf(ps) >= 0) {
+          await healToPaid(doc, '')
+          healed++
+        }
+      }
+    } catch (e) {
+      console.warn('[xyyx-pay] 自动对账失败', e && e.message)
+    }
+
+    return C.ok({ scanned: scanned.n, updated: scanned.updated, healed })
   },
 
   /**
