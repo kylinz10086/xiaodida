@@ -13,10 +13,6 @@
 					<text class="sub-num">{{ money(wallet.withdrawn) }}</text>
 					<text class="sub-label">已提现</text>
 				</view>
-				<view class="sub-item" v-if="wallet.frozen">
-					<text class="sub-num">{{ money(wallet.frozen) }}</text>
-					<text class="sub-label">审核中</text>
-				</view>
 			</view>
 		</view>
 
@@ -41,7 +37,7 @@
 				{{ submitting ? '提交中…' : '申请提现' }}
 			</view>
 
-			<text class="tip">人工审核，一般 1-3 个工作日打款；审核期间余额先进入「审核中」。客服会通过你认证的手机号联系确认收款方式。</text>
+			<text class="tip">自动到账，不再人工审核；单笔最高 {{ maxWithdraw }} 元、每天最多 5 次、单日累计 {{ maxDaily }} 元。两次提现间隔 10 分钟。</text>
 		</view>
 
 		<!-- 明细 -->
@@ -76,7 +72,13 @@
 
 	export default {
 		data() {
-			return { amount: '', submitting: false }
+			return {
+				amount: '',
+				submitting: false,
+				// 与云函数 xyyx-rider 里的风控常量保持一致
+				maxWithdraw: 200,
+				maxDaily: 500
+			}
 		},
 		computed: {
 			...mapGetters('rider', ['wallet', 'commissionRate']),
@@ -127,21 +129,24 @@
 					uni.showToast({ title: '余额不足 3 元', icon: 'none' })
 					return
 				}
-				this.amount = balance.toFixed(2)
+				// 单笔有上限，超过就只填到上限，剩下的下次再提
+				this.amount = Math.min(balance, this.maxWithdraw).toFixed(2)
 			},
 
 			async withdraw() {
 				if (this.submitting) return
 				const n = Number(this.amount)
 				if (!(n >= 3)) return uni.showToast({ title: '最低提现 3 元', icon: 'none' })
+				if (n > this.maxWithdraw) return uni.showToast({ title: `单笔最多 ${this.maxWithdraw} 元`, icon: 'none' })
 				if (n > (Number(this.wallet.balance) || 0)) return uni.showToast({ title: '超出可提现余额', icon: 'none' })
 
 				this.submitting = true
 				try {
-					await this.requestWithdraw(n)
+					const res = await this.requestWithdraw(n)
+					const left = (res && res.data && res.data.balance) || 0
 					uni.showModal({
-						title: '申请已提交',
-						content: `¥${n.toFixed(2)} 提现申请已提交，审核通过后到账。`,
+						title: '提现成功',
+						content: `¥${n.toFixed(2)} 已自动处理，剩余可提现 ¥${Number(left).toFixed(2)}。`,
 						showCancel: false,
 						confirmText: '知道了',
 						confirmColor: '#007AFF'
@@ -149,7 +154,7 @@
 					this.amount = ''
 					await this.load()
 				} catch (e) {
-					uni.showToast({ title: errText(e, '提交失败'), icon: 'none' })
+					uni.showToast({ title: errText(e, '提现失败'), icon: 'none' })
 				} finally {
 					this.submitting = false
 				}

@@ -85,19 +85,94 @@ export async function uploadImage(filePath, opts = {}) {
 	return data.fileID
 }
 
-/** 头像压成 data URI：不依赖云存储/域名，也不会过期 */
+/** 头像压成 data URI：不依赖云存储/域名，也不会过期
+ *
+ * 返回 { small, hd }：
+ *   small —— 240px 以内，存 users.avatar，列表/聊天都用它（每条列表都带一份，不能大）；
+ *   hd    —— 720px 以内，存 users.avatar_hd，只在「我的」页 / getProfile 下发。
+ */
 export async function avatarDataUri(filePath) {
-	const path = await compressImage(filePath, { quality: 60, width: 240 })
-	const b64 = await readBase64(path)
-	if (!b64) throw new Error('读取图片失败')
-	const uri = 'data:image/jpeg;base64,' + b64
-	if (uri.length > 65000) throw new Error('头像太大，换一张小一点的图片')
-	return uri
+	const small = await pickAvatar(filePath, [
+		{ width: 240, quality: 60 },
+		{ width: 200, quality: 50 },
+		{ width: 160, quality: 45 }
+	], 12000)
+	let hd = ''
+	try {
+		hd = await pickAvatar(filePath, [
+			{ width: 720, quality: 80 },
+			{ width: 640, quality: 75 },
+			{ width: 512, quality: 70 },
+			{ width: 400, quality: 65 }
+		], 120000)
+	} catch (e) {
+		hd = ''
+	}
+	return { small, hd: hd || small }
+}
+
+async function pickAvatar(filePath, sizes, maxLen) {
+	for (const s of sizes) {
+		const path = await compressImage(filePath, s)
+		const b64 = await readBase64(path)
+		if (!b64) throw new Error('读取图片失败')
+		const uri = 'data:image/jpeg;base64,' + b64
+		if (uri.length <= maxLen) return uri
+	}
+	throw new Error('头像太大，换一张小一点的图片')
 }
 
 /**
- * 取件/送达留痕：弹「拍照 / 跳过」，返回 fileID、空串（跳过）或 null（取消整件事）。
+ * 通过云对象把云存储里的原图读成 data URI。
+ *
+ * 小程序 <image> 走 downloadFile 域名白名单，云存储 CDN 域名没配就整片裂图；
+ * 临时链接还会过期。callFunction 用的是 request 域名（登录都靠它，一定配过），
+ * 所以兜底走云函数取图，客户端拿到 base64 再显示 / 预览。
+ */
+export async function fetchImageData(role, fileID) {
+	const id = String(fileID || '').trim()
+	if (id.indexOf('cloud://') !== 0) return ''
+	const res = await apiOf(role).getImageData(id)
+	if (!res || res.code !== 0) throw new Error((res && res.msg) || '图片读取失败')
+	const d = res.data || {}
+	if (!d.base64) throw new Error('图片读取失败')
+	return 'data:' + (d.mime || 'image/jpeg') + ';base64,' + d.base64
+}
+
+/**
+ * 生成缩略图 data URI（聊天图片、取件/送达留痕用）。
+ *
+ * 为什么不用云存储的临时链接显示：
+ * 小程序 <image> 走的是 downloadFile 域名白名单，云存储的 CDN 域名没加进去就加载不出来；
+ * 临时链接还会过期，旧消息过一阵子照样变裂图。缩略图直接内嵌成 data URI，
+ * 不发额外请求、不看过期时间，任何端都能立刻画出来。
+ * 原图仍然传云存储，只在点开预览时用（失败了就退回缩略图）。
+ */
+export async function thumbDataUri(filePath, opts = {}) {
+	const maxLen = opts.maxLen || 12000
+	const sizes = [
+		{ width: opts.width || 400, quality: 45 },
+		{ width: 280, quality: 40 },
+		{ width: 200, quality: 35 }
+	]
+	for (const s of sizes) {
+		try {
+			const path = await compressImage(filePath, s)
+			const b64 = await readBase64(path)
+			if (!b64) continue
+			const uri = 'data:image/jpeg;base64,' + b64
+			if (uri.length <= maxLen) return uri
+		} catch (e) {
+			// 这一档失败就换更小的再试
+		}
+	}
+	return ''
+}
+
+/**
+ * 取件/送达留痕：弹「拍照 / 跳过」，返回 { fileID, thumb }、空串（跳过）或 null（取消整件事）。
  * 不拍照也能继续，不能因为留痕卡住履约。
+ * thumb 是缩略图 data URI：详情页直接画它，不依赖云存储域名/临时链接。
  */
 export function askProofImage(opts = {}) {
 	return new Promise((resolve) => {
@@ -110,13 +185,16 @@ export function askProofImage(opts = {}) {
 					sizeType: ['compressed'],
 					sourceType: ['camera', 'album'],
 					success: async (img) => {
+						const path = img.tempFilePaths[0]
 						try {
-							const id = await uploadImage(img.tempFilePaths[0], {
+							const thumb = await thumbDataUri(path, { width: 480 })
+							const fileID = await uploadImage(path, {
 								role: opts.role || 'rider',
 								dir: 'proof',
-								width: 1280
+								width: 1600,
+								quality: 75
 							})
-							resolve(id)
+							resolve({ fileID, thumb })
 						} catch (e) {
 							uni.showToast({ title: (e && e.message) || '留痕上传失败', icon: 'none' })
 							resolve('')
@@ -126,6 +204,30 @@ export function askProofImage(opts = {}) {
 				})
 			},
 			fail: () => resolve(null)
+		})
+	})
+}
+
+/**
+ * 把 data URI 写成临时文件。
+ * uni.previewImage / <image> 对大图更依赖本地路径，缩略图要放大看时先落盘最稳。
+ */
+export function dataUriToTempFile(uri, ext = 'jpg') {
+	return new Promise((resolve) => {
+		const s = String(uri || '')
+		const i = s.indexOf('base64,')
+		if (i < 0) return resolve('')
+		const b64 = s.slice(i + 7)
+		const fs = typeof wx !== 'undefined' && wx.getFileSystemManager ? wx.getFileSystemManager() : null
+		const base = (typeof wx !== 'undefined' && wx.env && wx.env.USER_DATA_PATH) || ''
+		if (!fs || !base) return resolve('')
+		const filePath = `${base}/preview-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
+		fs.writeFile({
+			filePath,
+			data: b64,
+			encoding: 'base64',
+			success: () => resolve(filePath),
+			fail: () => resolve('')
 		})
 	})
 }

@@ -61,7 +61,7 @@
 | --- | --- | --- |
 | `_id` | string | 用户 uid |
 | `balance_cent` | int | 可用余额 |
-| `frozen_cent` | int | 提现审核中冻结 |
+| `frozen_cent` | int | 旧版「提现审核中」冻结金额；已改为自动提现，仅兼容旧数据（下次提现自动退回余额） |
 | `income_cent` | int | 累计收入 |
 | `withdrawn_cent` | int | 累计已提现 |
 

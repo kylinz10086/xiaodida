@@ -3,7 +3,7 @@
 		<!-- 顶部信息条：对方 + 这单的标题/状态；点一下可以回订单 -->
 		<view class="chat-head" @click="goTask">
 			<view class="head-avatar" :style="{ background: peerColor }">
-				<image v-if="peer.avatar" class="head-avatar-img" :src="peer.avatar" mode="aspectFill"></image>
+				<image v-if="peerAvatar" class="head-avatar-img" :src="peerAvatar" mode="aspectFill"></image>
 				<text v-else class="head-avatar-text">{{ initial(peer.nickname) }}</text>
 			</view>
 			<view class="head-main">
@@ -34,12 +34,15 @@
 					<!-- 普通消息 -->
 					<view v-else class="msg" :class="{ mine: m.from_id === me }">
 						<view class="avatar" :style="{ background: m.from_id === me ? myColor : peerColor }">
-							<image v-if="m.from_id === me && myAvatar" class="avatar-img" :src="myAvatar" mode="aspectFill"></image>
+							<image v-if="m.from_id === me ? myAvatar : peerAvatar" class="avatar-img"
+								:src="m.from_id === me ? myAvatar : peerAvatar" mode="aspectFill"></image>
 							<text v-else>{{ m.from_id === me ? initial(myName) : initial(peer.nickname) }}</text>
 						</view>
 						<view class="bubble-wrap">
-							<image v-if="m.type === 'image'" class="bubble-img" :src="imgUrl(m.content)" mode="widthFix"
-								@click="previewImage(imgUrl(m.content))"></image>
+							<view v-if="m.type === 'image'" class="bubble-img-wrap">
+								<image class="bubble-img" :src="bubbleSrc(m)" mode="widthFix" @click="previewImage(m)"></image>
+								<text v-if="!bubbleSrc(m)" class="bubble-img-tip">{{ m._imgFailed ? '图片加载失败，点开重试' : '图片加载中…' }}</text>
+							</view>
 							<view v-else class="bubble">{{ m.content }}</view>
 							<text class="send-state" v-if="m.pending">发送中…</text>
 							<text class="send-state err" v-else-if="m.failed" @click="resend(m)">发送失败，点此重发</text>
@@ -74,10 +77,20 @@
 	 */
 	const QUICK = ['我快到了', '放门口就行', '在楼下等你', '稍等一下']
 
-	import { uploadImage, getTempUrls } from '@/common/image.js'
+	import { uploadImage, getTempUrls, thumbDataUri, dataUriToTempFile, fetchImageData } from '@/common/image.js'
 
 	function pad(n) {
 		return n < 10 ? '0' + n : '' + n
+	}
+
+	/** 只有这几种 src 能直接画出来：内嵌 data URI、http(s) 链接、本地静态资源 */
+	function displayable(src) {
+		const s = String(src || '')
+		if (!s) return false
+		if (s.indexOf('data:image/') === 0) return true
+		if (s.indexOf('http://') === 0 || s.indexOf('https://') === 0) return true
+		if (s.charAt(0) === '/') return true
+		return false
 	}
 
 	export default {
@@ -108,7 +121,10 @@
 			},
 			myAvatar() {
 				const u = uni.getStorageSync('userInfo') || {}
-				return u.avatar || ''
+				return displayable(u.avatar) ? u.avatar : ''
+			},
+			peerAvatar() {
+				return displayable(this.peer.avatar) ? this.peer.avatar : ''
 			},
 			peerColor() {
 				return this.colorOf(this.peer.nickname)
@@ -212,16 +228,42 @@
 			imgUrl(fileID) {
 				return this.imgMap[fileID] || fileID
 			},
-			/** 把聊天里的 cloud:// 图片换成临时链接；懒加载，失败就保留原值 */
+			/**
+			 * 气泡里图片的 src：
+			 * 1. 新消息自带缩略图 data URI（不依赖域名、不会过期）；
+			 * 2. 老消息只有 cloud:// fileID，用临时链接兜底；
+			 * 3. 都没有就留空（显示灰底，不出现裂图图标）。
+			 */
+			bubbleSrc(m) {
+				if (!m || m.type !== 'image') return ''
+				if (displayable(m.thumb)) return m.thumb
+				if (displayable(m.content)) return m.content
+				const url = this.imgMap[m.content]
+				return displayable(url) ? url : ''
+			},
+			/** 把聊天里没有缩略图的老图片补上：先试临时链接，失败再让云函数取原图 */
 			async resolveImages() {
-				const ids = this.messages
+				const ids = Array.from(new Set(this.messages
 					.filter((m) => m.type === 'image' && typeof m.content === 'string' && m.content.indexOf('cloud://') === 0)
 					.map((m) => m.content)
-					.filter((id) => !this.imgMap[id])
+					.filter((id) => !this.imgMap[id])))
 				if (!ids.length) return
-				const map = await getTempUrls(Array.from(new Set(ids)))
+				const map = await getTempUrls(ids)
 				if (Object.keys(map).length) {
 					this.imgMap = Object.assign({}, this.imgMap, map)
+				}
+				// 临时链接拿不到（域名没配 / 链接过期）→ 走 callFunction 取 base64
+				const missing = ids.filter((id) => !displayable(this.imgMap[id]))
+				for (const id of missing.slice(0, 4)) {
+					try {
+						const uri = await fetchImageData(this.role, id)
+						if (uri) this.imgMap = Object.assign({}, this.imgMap, { [id]: uri })
+					} catch (e) {
+						// 标记失败，气泡上给「点开重试」；单张失败不影响其它消息
+						this.messages.forEach((m) => {
+							if (m.type === 'image' && m.content === id) m._imgFailed = true
+						})
+					}
 				}
 			},
 			useQuick(q) {
@@ -241,12 +283,12 @@
 						if (!path) return
 						uni.showLoading({ title: '上传中…', mask: true })
 						try {
-							// 走云函数中转，避免真机 uploadFile 域名白名单限制
-							const fileID = await uploadImage(path, { role: this.role, dir: 'chat', width: 1080 })
+							// 先做一张内嵌缩略图：上屏/对方展示都不依赖云存储域名
+							const thumb = await thumbDataUri(path, { width: 480, maxLen: 12000 })
+							// 原图传得更清楚一点（1440 宽），点开预览时用
+							const fileID = await uploadImage(path, { role: this.role, dir: 'chat', width: 1440, quality: 70 })
 							uni.hideLoading()
-							const map = await getTempUrls([fileID])
-							if (map[fileID]) this.imgMap = Object.assign({}, this.imgMap, map)
-							this.pushAndSend(fileID, 'image')
+							this.pushAndSend(fileID, 'image', thumb)
 						} catch (e) {
 							uni.hideLoading()
 							uni.showToast({ title: (e && e.message) || '图片发送失败', icon: 'none' })
@@ -254,7 +296,7 @@
 					}
 				})
 			},
-			async pushAndSend(content, type) {
+			async pushAndSend(content, type, thumb) {
 				if (!content || this.sending) return
 				this.sending = true
 				if (type === 'text') this.draft = ''
@@ -266,12 +308,13 @@
 					from_id: this.me,
 					content,
 					type,
+					thumb: thumb || '',
 					create_time: now,
 					pending: true
 				})
 				this.scrollToBottom()
 				try {
-					const res = await this.api().sendChat(this.taskId, content, this.meta(), type)
+					const res = await this.api().sendChat(this.taskId, content, this.meta(), type, thumb || '')
 					if (res.code !== 0) throw new Error(res.msg)
 					const saved = res.data || {}
 					const i = this.messages.findIndex((m) => m._id === tempId)
@@ -281,10 +324,12 @@
 							from_id: this.me,
 							content,
 							type,
+							thumb: saved.thumb || thumb || '',
 							create_time: saved.create_time || now
 						})
 					}
-					if (type === 'image') this.resolveImages()
+					// 只有没有缩略图的老式消息才需要临时链接兜底
+					if (type === 'image' && !thumb) this.resolveImages()
 				} catch (e) {
 					const m = this.messages.find((x) => x._id === tempId)
 					if (m) {
@@ -299,10 +344,50 @@
 			},
 			resend(m) {
 				this.messages = this.messages.filter((x) => x._id !== m._id)
-				this.pushAndSend(m.content, m.type || 'text')
+				this.pushAndSend(m.content, m.type || 'text', m.thumb || '')
 			},
-			previewImage(url) {
-				if (!url) return
+			/** 点开大图：优先原图（临时链接或云函数取回的 base64），取不到再用缩略图 */
+			async previewImage(m) {
+				if (!m || m.type !== 'image') return
+				let url = this.imgMap[m.content] || ''
+				let lastErr = ''
+				const isCloud = typeof m.content === 'string' && m.content.indexOf('cloud://') === 0
+
+				// 1. 手头没有可用链接 → 先试临时链接
+				if (!displayable(url) && isCloud) {
+					const map = await getTempUrls([m.content])
+					url = map[m.content] || ''
+					if (url) this.imgMap = Object.assign({}, this.imgMap, { [m.content]: url })
+				}
+				// 2. 还是不行 → 云函数取原图 base64（不依赖 downloadFile 域名）
+				if (!displayable(url) && isCloud) {
+					uni.showLoading({ title: '加载原图…', mask: true })
+					try {
+						url = await fetchImageData(this.role, m.content)
+						if (url) {
+							this.imgMap = Object.assign({}, this.imgMap, { [m.content]: url })
+							m._imgFailed = false
+						}
+					} catch (e) {
+						lastErr = (e && e.message) || ''
+						url = ''
+					}
+					uni.hideLoading()
+				}
+				// 3. 原图打不开 → 缩略图兜底
+				if (!displayable(url)) url = displayable(m.thumb) ? m.thumb : ''
+				if (!url) {
+					uni.showToast({ title: lastErr || '这张图暂时打不开', icon: 'none' })
+					return
+				}
+				// previewImage 对 data URI 支持不稳，先落成本地临时文件再看
+				if (url.indexOf('data:image/') === 0) {
+					const local = await dataUriToTempFile(url)
+					if (local) {
+						uni.previewImage({ urls: [local], current: local })
+						return
+					}
+				}
 				uni.previewImage({ urls: [url], current: url })
 			},
 			showTime(i) {
@@ -509,6 +594,26 @@
 		max-height: 480rpx;
 		border-radius: 12rpx;
 		background: #e9edf3;
+	}
+
+	.bubble-img-wrap {
+		position: relative;
+		display: inline-block;
+		min-width: 200rpx;
+		min-height: 200rpx;
+		border-radius: 12rpx;
+		background: #e9edf3;
+	}
+
+	.bubble-img-tip {
+		position: absolute;
+		left: 0;
+		right: 0;
+		top: 50%;
+		transform: translateY(-50%);
+		text-align: center;
+		font-size: 22rpx;
+		color: #9aa1ad;
 	}
 
 	.send-state {

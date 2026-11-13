@@ -246,7 +246,7 @@
 	import { mapActions, mapGetters } from 'vuex';
 	import UserInfoListItem from '../components/user-info-list-item.vue';
 	import Moment from '../utils/moment/moment.js';
-	import { uploadImage, getTempUrls } from '@/common/image.js';
+	import { uploadImage, getTempUrls, thumbDataUri } from '@/common/image.js';
 	import { distanceMeters } from '@/common/rider-util.js';
 	import { requestNotify } from '@/common/notify.js';
 
@@ -292,6 +292,8 @@
 				/** 图片 fileID 与预览地址的对应关系；提交时只传 fileID */
 				imageIds: [],
 				imageIdByPreview: {},
+				/** fileID -> 缩略图 data URI：提交时一起存，详情页直接展示 */
+				thumbByFileID: {},
 				reusedAddress: false,
 				token: '',
 				submitting: false,
@@ -426,14 +428,29 @@
 						if (this.destination && !this.destination.position && this.destination.longitude && this.destination.latitude) {
 							this.destination.position = this.destination.longitude + ',' + this.destination.latitude;
 						}
-						// 图片：库里存 fileID，编辑时换成临时链接预览，提交时再换回 fileID
+						// 图片：库里存 fileID，编辑时换成缩略图/临时链接预览，提交时再换回 fileID
 						const ids = (task.images || []).slice(0, 6);
 						this.imageIds = ids.slice();
 						this.ceshiData = ids.slice();
+						const thumbs = task.image_thumbs || [];
+						ids.forEach((id, i) => {
+							if (thumbs[i]) this.thumbByFileID[id] = thumbs[i];
+						});
+						// 有缩略图直接用它预览（不依赖域名），没有的再找临时链接
+						this.ceshiData = ids.map((id) => this.thumbByFileID[id] || id);
+						ids.forEach((id) => { this.imageIdByPreview[this.thumbByFileID[id] || id] = id; });
 						getTempUrls(ids).then((map) => {
 							if (!Object.keys(map).length) return;
-							this.ceshiData = ids.map((id) => map[id] || id);
-							ids.forEach((id) => { if (map[id]) this.imageIdByPreview[map[id]] = id; });
+							ids.forEach((id) => {
+								if (map[id]) {
+									this.imageIdByPreview[map[id]] = id;
+									if (!this.thumbByFileID[id]) {
+										// 老订单没有缩略图：临时链接能开就先显示，打不开就是灰块
+										const i = this.ceshiData.indexOf(id);
+										if (i >= 0) this.ceshiData.splice(i, 1, map[id]);
+									}
+								}
+							});
 						});
 					}
 					uni.removeStorageSync('currentEditTaskId');
@@ -495,9 +512,12 @@
 				for (const filePath of params) {
 					try {
 						uni.showLoading({ title: '上传中…', mask: true });
-						const fileID = await uploadImage(filePath, { role: 'user', dir: 'tasks', width: 1280 });
-						const map = await getTempUrls([fileID]);
-						const preview = map[fileID] || fileID;
+						// 顺手做一张缩略图：列表/详情直接画它，不依赖云存储域名
+						const thumb = await thumbDataUri(filePath, { width: 480, maxLen: 12000 });
+						const fileID = await uploadImage(filePath, { role: 'user', dir: 'tasks', width: 1440, quality: 70 });
+						const map = thumb ? {} : await getTempUrls([fileID]);
+						const preview = thumb || map[fileID] || fileID;
+						if (thumb) this.thumbByFileID[fileID] = thumb;
 						this.imageIds.push(fileID);
 						this.imageIdByPreview[preview] = fileID;
 						this.imageIdByPreview[fileID] = fileID;
@@ -581,6 +601,11 @@
 				this.submitting = true;
 				
 				// 字段名对齐云对象 xyyx-user.publishTask（服务端只用 snake_case + amount 元）
+				// 预览地址可能是缩略图 data URI / 临时链接，提交时换回 fileID
+				const submitImages = (this.ceshiData || [])
+					.map((url) => this.imageIdByPreview[url] || url)
+					.filter((id) => typeof id === 'string' && id.length > 0)
+					.slice(0, 6);
 				const taskData = {
 					type: this.currentType,
 					title: this.taskTitle,
@@ -595,11 +620,10 @@
 					remark: this.remark,
 					origin: this.origin,
 					destination: this.destination,
-					// 预览地址可能是临时链接，提交时换回 fileID；老数据没有映射就原样传
-					images: (this.ceshiData || [])
-						.map((url) => this.imageIdByPreview[url] || url)
-						.filter((id) => typeof id === 'string' && id.length > 0)
-						.slice(0, 6)
+					// 预览地址可能是临时链接/缩略图，提交时换回 fileID；老数据没有映射就原样传
+					images: submitImages,
+					// 与 images 同下标的缩略图，详情页直接展示
+					image_thumbs: submitImages.map((id) => this.thumbByFileID[id] || '')
 				};
 				
 				// 有弹窗时要等用户看完再跳转，否则弹窗刚出来页面就被切走了

@@ -3,7 +3,7 @@
 		<view class="list" v-if="conversations.length">
 			<view class="conv" v-for="c in conversations" :key="c.task_id" @click="openChat(c)">
 				<view class="conv-avatar" :style="{ background: colorOf(c.peer && c.peer.nickname) }">
-					<image v-if="c.peer && c.peer.avatar" class="conv-avatar-img" :src="c.peer.avatar" mode="aspectFill"></image>
+					<image v-if="avatarOf(c.peer)" class="conv-avatar-img" :src="avatarOf(c.peer)" mode="aspectFill"></image>
 					<text v-else>{{ initial(c.peer && c.peer.nickname) }}</text>
 				</view>
 				<view class="conv-main">
@@ -112,6 +112,15 @@
 			initial(name) {
 				const s = String(name || '?').trim()
 				return s ? s.slice(0, 1) : '?'
+			},
+			/** 只有 data URI / http(s) / 静态路径能直接画，cloud:// 会变裂图 */
+			avatarOf(peer) {
+				const s = String((peer && peer.avatar) || '')
+				if (!s) return ''
+				if (s.indexOf('data:image/') === 0) return s
+				if (s.indexOf('http://') === 0 || s.indexOf('https://') === 0) return s
+				if (s.charAt(0) === '/') return s
+				return ''
 			},
 			colorOf(name) {
 				const colors = ['#5b8def', '#f2994a', '#27ae60', '#9b51e0', '#eb5757', '#2d9cdb']

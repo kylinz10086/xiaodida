@@ -1,7 +1,7 @@
 <template>
 	<view class="htz-image-upload-list">
 		<view class="htz-image-upload-Item" v-for="(item,index) in uploadLists" :key="index">
-			<view class="htz-image-upload-Item-video" v-if="(!/.(gif|jpg|jpeg|png|gif|jpg|png)$/.test(item))">
+			<view class="htz-image-upload-Item-video" v-if="isVideoItem(item)">
 				<video :disabled="false" :controls="false" :src="item">
 					<cover-view class="htz-image-upload-Item-video-fixed" @click="previewVideo(item)"></cover-view>
 
@@ -49,6 +49,7 @@
 </style>
 
 <script>
+	import { dataUriToTempFile } from '@/common/image.js';
 	export default {
 		name: 'htz-image-upload',
 		props: {
@@ -188,16 +189,25 @@
 					}
 				});
 			},
-			imgPreview(index) {
-
-				var imgData = this.uploadLists.filter(item => /.(gif|jpg|jpeg|png|gif|jpg|png)$/.test(item)) //只预览图片的
-				uni.previewImage({
-					urls: imgData,
-					current: index,
-					loop: true,
-				});
-
-
+			imgPreview(item) {
+				// 缩略图是 data URI，扩展名正则认不出来；这里改成按「是不是视频」过滤
+				const list = (this.uploadLists || []).filter((it) => !this.isVideoItem(it))
+				if (!list.length) return
+				const idx = list.indexOf(item)
+				const toLocal = (u) => {
+					if (String(u).indexOf('data:image/') !== 0) return Promise.resolve(u)
+					return dataUriToTempFile(u).then((local) => local || u)
+				}
+				Promise.all(list.map(toLocal)).then((urls) => {
+					const current = urls[idx >= 0 ? idx : 0] || urls[0]
+					if (current) uni.previewImage({ urls, current, loop: true })
+				})
+			},
+			/** data URI 缩略图不是视频，别被扩展名正则误判成 video */
+			isVideoItem(item) {
+				const s = String(item || '')
+				if (s.indexOf('data:image/') === 0) return false
+				return !/\.(gif|jpg|jpeg|png)$/i.test(s)
 			},
 			chooseFile() {
 				if (this.disabled) {

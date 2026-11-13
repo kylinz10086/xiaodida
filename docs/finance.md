@@ -13,7 +13,7 @@
 | 用户支付 | `markPaid` | `escrow_in +10` | — | 托管 +10 |
 | 骑手接单 | `grabTask` | 无 | — | — |
 | 用户确认收货 | `settleTask` | `income +9.2`、`commission +0.8`、`escrow_out -10` | +9.2 | 托管 -10、佣金 +0.8 |
-| 骑手提现 | `requestWithdraw` | `withdraw -9.2` | 余额 -9.2、冻结 +9.2 | — |
+| 骑手提现 | `requestWithdraw` | `withdraw -9.2` | 余额 -9.2、累计已提现 +9.2（自动处理） |
 
 **接单不产生任何资金变动**，这是「外卖式托管」的关键：钱在平台手里，跑完才结算。
 
@@ -82,6 +82,6 @@ wallets.balance_cent === Σ transactions(amount_cent) where user_id = uid
 | 项 | 说明 |
 | --- | --- |
 | ~~自动确认定时任务~~ | ✅ 已实现 `xyyx-cron`（每 10 分钟扫一次 `auto_confirm_at < now` 的订单并结算，同时清理过期 nonce） |
-| 提现打款 | 目前只扣余额进冻结，需要人工在后台打款后改状态 |
+| 提现打款 | 已改为自动处理（填流水 + 累计已提现）；实际出款仍按平台约定线下/后续接商家转账到零钱 |
 | 对账脚本 | `tools/scripts/reconcile.mjs`（按 3.3 的等式跑） |
 | 平台账户表 | 目前佣金只记流水，没有单独的 `platform` 钱包行 |

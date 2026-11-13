@@ -5,7 +5,7 @@
 			<view class="header-content">
 				<view class="user-info" @click="handleUserClick">
 					<view class="avatar-wrap">
-						<image class="avatar" :src="userInfo.avatar || defaultAvatar" mode="aspectFill"></image>
+						<image class="avatar" :src="avatarSrc" mode="aspectFill"></image>
 						<view class="avatar-border"></view>
 					</view>
 					<view class="user-text">
@@ -141,6 +141,10 @@
 				<text class="legal-link-arrow">›</text>
 			</view>
 		</view>
+
+		<view class="version-footer">
+			<text class="version-text">{{ versionText }}</text>
+		</view>
 		
 		<view class="edit-modal" v-if="showEditModal" @touchmove.stop.prevent>
 			<view class="modal-mask" @click="closeEditModal"></view>
@@ -195,6 +199,7 @@ import { mapActions, mapGetters } from 'vuex'
 import WechatLoginModal from '@/components/wechat-login-modal/wechat-login-modal.vue'
 import { fmtMoney } from '@/common/rider-util.js'
 import { avatarDataUri } from '@/common/image.js'
+import { versionText as appVersionText } from '@/common/version.js'
 
 export default {
 	components: {
@@ -214,6 +219,7 @@ export default {
 			defaultAvatar: '/static/icon/head1.png',
 			userInfo: {
 				avatar: '',
+				avatar_hd: '',
 				nickname: '',
 				mobile: ''
 			}
@@ -221,6 +227,14 @@ export default {
 	},
 	computed: {
 		...mapGetters(['getUserStats']),
+		/** 头像：优先高清版（720px），没有再退回压缩版 */
+		avatarSrc() {
+			const u = this.userInfo || {}
+			return u.avatar_hd || u.avatar || this.defaultAvatar
+		},
+		versionText() {
+			return appVersionText()
+		},
 		/** 骑手身份（0未申请 1审核中 2已通过 3已拒绝） */
 		riderStatusText() {
 			const map = { 0: '未开通', 1: '审核中', 2: '已认证', 3: '未通过' }
@@ -333,6 +347,7 @@ export default {
 				if (data) {
 					this.userInfo = {
 						avatar: data.avatar || '',
+						avatar_hd: data.avatar_hd || '',
 						nickname: data.nickname || data.name || '',
 						mobile: data.mobile || '',
 						// 模板里的 riderStatusText 依赖这个字段，之前被丢掉了
@@ -346,6 +361,7 @@ export default {
 				if (stored && Object.keys(stored).length > 0) {
 					this.userInfo = {
 						avatar: stored.avatar || '',
+						avatar_hd: stored.avatar_hd || '',
 						nickname: stored.nickname || '',
 						mobile: stored.mobile || '',
 						rider_status: stored.rider_status || 0
@@ -399,16 +415,20 @@ export default {
 				success: async (res) => {
 					const tempFilePath = res.tempFilePaths[0]
 					const old = this.userInfo.avatar
+					const oldHd = this.userInfo.avatar_hd
 					this.userInfo.avatar = tempFilePath
 					try {
-						// 头像压成 data URI 存资料里：不依赖云存储，不会因 uploadFile 域名白名单失败
-						const uri = await avatarDataUri(tempFilePath)
-						await this.updateUserInfo({ avatar: uri })
-						this.userInfo.avatar = uri
+						// 头像压成 data URI 存资料里：不依赖云存储，不会因 uploadFile 域名白名单失败。
+						// small 给列表/聊天（每条都要带，必须小），hd 给「我的」页显示。
+						const { small, hd } = await avatarDataUri(tempFilePath)
+						await this.updateUserInfo({ avatar: small, avatar_hd: hd })
+						this.userInfo.avatar = small
+						this.userInfo.avatar_hd = hd
 						uni.setStorageSync('userInfo', this.userInfo)
 						uni.showToast({ title: '头像已更新', icon: 'success' })
 					} catch (e) {
 						this.userInfo.avatar = old
+						this.userInfo.avatar_hd = oldHd
 						uni.showToast({ title: (e && e.message) || '头像更新失败', icon: 'none' })
 					}
 				}
@@ -809,6 +829,16 @@ export default {
 /* 法律条款入口：居中灰字，和微信原生的「更多资料」页一致 */
 .legal-footer {
 	padding: 16rpx 0 8rpx;
+}
+
+.version-footer {
+	padding: 8rpx 0 32rpx;
+	text-align: center;
+}
+
+.version-text {
+	font-size: 20rpx;
+	color: #c2c7d0;
 }
 
 .legal-link {

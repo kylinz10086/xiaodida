@@ -1,6 +1,6 @@
 {
     "name": "xiaodida-client",
-    "version": "0.9.2",
+    "version": "0.9.7",
     "description": "校递达 —— 浙江中医药大学校园快递代取 / 代带餐食互助小程序（uni-app + uniCloud）",
     "main": "main.js",
     "scripts": {

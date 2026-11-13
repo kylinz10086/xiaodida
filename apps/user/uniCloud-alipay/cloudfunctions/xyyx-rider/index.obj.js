@@ -27,6 +27,15 @@ function todayStart() {
   return Math.floor((now + OFFSET) / 86400000) * 86400000 - OFFSET
 }
 
+/**
+ * 提现风控（自动处理，不再人工审核）。
+ * 单笔 / 单日上限是给「不设人工」兜底的：异常刷提现也刷不出去。
+ */
+const WITHDRAW_MAX_YUAN = 200
+const WITHDRAW_DAILY_YUAN = 500
+const WITHDRAW_DAILY_COUNT = 5
+const WITHDRAW_COOLDOWN_MS = 10 * 60 * 1000
+
 /** 学号必须是 15 位数字：4 位学年 + 6 位学院专业号 + 5 位班级学号 */
 function assertStudentNo(value) {
   const raw = String(value === undefined || value === null ? '' : value).trim()
@@ -153,10 +162,11 @@ const api = {
   async updateProfile(data = {}) {
     const auth = await C.requireAuth(this)
     await C.checkNonce(auth, data.nonce, data.timestamp)
-    const allowed = C.pick(data, ['nickname', 'avatar', 'mobile'])
+    const allowed = C.pick(data, ['nickname', 'avatar', 'avatar_hd', 'mobile'])
     const patch = {}
     if ('nickname' in allowed) patch.nickname = C.str(allowed.nickname, { max: 20, name: '昵称', required: true })
-    if ('avatar' in allowed) patch.avatar = C.str(allowed.avatar, { max: 300, name: '头像' })
+    if ('avatar' in allowed) patch.avatar = C.avatarValue(allowed.avatar, '头像')
+    if ('avatar_hd' in allowed) patch.avatar_hd = C.avatarValue(allowed.avatar_hd, '高清头像', C.AVATAR_HD_MAX)
     if ('mobile' in allowed) {
       const mobile = C.str(allowed.mobile, { max: 11, name: '手机号' })
       if (mobile) C.assert(/^1\d{10}$/.test(mobile), 400, '手机号格式不对')
@@ -204,7 +214,7 @@ const api = {
   async getTaskDetail(taskId) {
     const auth = await C.requireAuth(this)
     const task = await C.getTask(C.taskIdOf(taskId))
-    return C.ok(C.taskForRider(task, auth.uid))
+    return C.ok(C.taskForRider(task, auth.uid, { detail: true }))
   },
 
   /** 抢单：用「状态还是待接单」做 CAS，防止两个人同时接到 */
@@ -253,8 +263,8 @@ const api = {
     return C.ok({ id, income: C.yuan(incomeCent) }, `抢单成功，预计可赚 ¥${C.yuan(incomeCent)}`)
   },
 
-  /** 标记取到件；proofImage 可选（云存储 fileID），用于纠纷留痕 */
-  async markPicked(taskId, meta = {}, proofImage = '') {
+  /** 标记取到件；proofImage 可选（云存储 fileID），proofThumb 是展示用缩略图 data URI */
+  async markPicked(taskId, meta = {}, proofImage = '', proofThumb = '') {
     const auth = await C.requireAuth(this)
     await C.checkNonce(auth, meta.nonce, meta.timestamp)
     const id = C.taskIdOf(taskId)
@@ -266,7 +276,11 @@ const api = {
 
     const proof = proofImage ? C.str(proofImage, { max: 300, name: '取件留痕' }) : ''
     const patch = { picked_time: Date.now() }
-    if (proof) patch.pick_proof = proof
+    if (proof) {
+      patch.pick_proof = proof
+      const thumb = C.imageThumb(proofThumb, { name: '取件留痕缩略图' })
+      if (thumb) patch.pick_proof_thumb = thumb
+    }
 
     const upd = await C.db
       .collection(C.COLL.tasks)
@@ -285,7 +299,7 @@ const api = {
    * 这正是「接单之后无法完成订单」的修复点 —— 以前点完送达状态还是「进行中」，
    * 只能等用户确认或 24 小时定时任务，用户一忙这单就永远完不成。
    */
-  async markDelivered(taskId, meta = {}, proofImage = '') {
+  async markDelivered(taskId, meta = {}, proofImage = '', proofThumb = '') {
     const auth = await C.requireAuth(this)
     await C.checkNonce(auth, meta.nonce, meta.timestamp)
     const id = C.taskIdOf(taskId)
@@ -303,7 +317,11 @@ const api = {
       // 即便送达即结算，也留一个时间戳：用户 24 小时内可以申诉/售后
       auto_confirm_at: now + C.S().autoConfirmHours * 3600 * 1000
     }
-    if (proof) patch.deliver_proof = proof
+    if (proof) {
+      patch.deliver_proof = proof
+      const thumb = C.imageThumb(proofThumb, { name: '送达留痕缩略图' })
+      if (thumb) patch.deliver_proof_thumb = thumb
+    }
 
     const upd = await C.db
       .collection(C.COLL.tasks)
@@ -439,23 +457,90 @@ const api = {
     })
   },
 
-  /** 提现申请（V1 走人工审核，不自动打款） */
+  /**
+   * 提现（自动处理，不再人工审核）
+   *
+   * 之前是「扣余额 → 进 frozen → 等人工审核」，但后台根本没有审核/打款入口，
+   * 钱一旦提出来就永远冻在「审核中」。现在改成自动入账，同时用代码做风控：
+   *   1. 只有认证通过的骑手能提；
+   *   2. 单笔有上限、单日有累计上限和次数上限、两次提现之间有冷却；
+   *   3. 扣余额用 CAS（balance >= amount），并发不会超提；
+   *   4. 每笔都写 transactions 流水（type=withdraw），后台可按流水核查。
+   * 历史遗留的 frozen_cent（旧审核单）会在下一次提现时退回余额，避免钱卡死。
+   */
   async requestWithdraw(data = {}) {
     const auth = await C.requireAuth(this)
     await C.checkNonce(auth, data.nonce, data.timestamp)
-    const amountCent = C.toCents(data.amount)
-    const minWithdrawCent = Math.round(C.S().minWithdrawYuan * 100)
-    C.assert(amountCent >= minWithdrawCent, 400, `提现金额不能低于 ${C.S().minWithdrawYuan} 元`)
 
-    const wallet = await C.ensureWallet(auth.uid)
-    C.assert(wallet.balance_cent >= amountCent, 400, '余额不足')
+    const profile = await C.ensureProfile(auth.uid)
+    C.assert((profile.rider_status || 0) === 2, 403, '骑手认证通过后才能提现')
 
+    const amountYuan = Number(data.amount)
+    const amountCent = Math.round(amountYuan * 100)
+    C.assert(Number.isFinite(amountCent) && amountCent > 0, 400, '提现金额不合法')
+
+    const s = C.S()
+    const minCent = Math.round(s.minWithdrawYuan * 100)
+    C.assert(amountCent >= minCent, 400, `提现金额不能低于 ${s.minWithdrawYuan} 元`)
+    C.assert(amountCent <= WITHDRAW_MAX_YUAN * 100, 400, `单笔最多提现 ${WITHDRAW_MAX_YUAN} 元，可分几次提`)
+
+    // 单日次数 + 两次提现冷却：都从流水里算，不额外建表
+    const since = todayStart()
+    const todayRes = await C.db
+      .collection(C.COLL.transactions)
+      .where({ user_id: auth.uid, type: C.TX_TYPE.WITHDRAW, create_time: C.dbCmd.gte(since) })
+      .orderBy('create_time', 'desc')
+      .get()
+    const todayTx = todayRes.data || []
+    C.assert(todayTx.length < WITHDRAW_DAILY_COUNT, 400, `每天最多提现 ${WITHDRAW_DAILY_COUNT} 次，明天再来`)
+
+    const todayCent = todayTx.reduce((sum, t) => sum + Math.abs(Number(t.amount_cent) || 0), 0)
+    C.assert(todayCent + amountCent <= WITHDRAW_DAILY_YUAN * 100, 400, `单日累计提现上限 ${WITHDRAW_DAILY_YUAN} 元`)
+
+    if (todayTx.length) {
+      const last = Number(todayTx[0].create_time) || 0
+      const wait = WITHDRAW_COOLDOWN_MS - (Date.now() - last)
+      if (wait > 0) {
+        throw new C.BizError(400, `刚提过一次，请 ${Math.ceil(wait / 60000)} 分钟后再试`)
+      }
+    }
+
+    let wallet = await C.ensureWallet(auth.uid)
+
+    // 旧版人工审核遗留下来的冻结金额：没有审核接口等于取不出来，这里一次性退回余额
+    const frozen = Number(wallet.frozen_cent) || 0
+    if (frozen > 0) {
+      await C.db.collection(C.COLL.wallets).doc(auth.uid).update({
+        balance_cent: C.dbCmd.inc(frozen),
+        frozen_cent: 0,
+        update_time: Date.now()
+      })
+      await C.db.collection(C.COLL.transactions).add(
+        C.txDoc({
+          type: C.TX_TYPE.WITHDRAW,
+          uid: auth.uid,
+          taskId: '',
+          amountCent: frozen,
+          remark: '历史提现退回（旧审核单）',
+          key: `withdraw-release:${auth.uid}:${Date.now()}`
+        })
+      )
+      wallet = {
+        ...wallet,
+        balance_cent: Number(wallet.balance_cent) + frozen,
+        frozen_cent: 0
+      }
+    }
+
+    C.assert(Number(wallet.balance_cent) >= amountCent, 400, '余额不足')
+
+    // CAS 扣款：并发提现时只有一次能成功
     const upd = await C.db
       .collection(C.COLL.wallets)
       .where({ _id: auth.uid, balance_cent: C.dbCmd.gte(amountCent) })
       .update({
         balance_cent: C.dbCmd.inc(-amountCent),
-        frozen_cent: C.dbCmd.inc(amountCent),
+        withdrawn_cent: C.dbCmd.inc(amountCent),
         update_time: Date.now()
       })
     C.assert(upd.updated === 1, 409, '余额已变化，请刷新')
@@ -466,11 +551,21 @@ const api = {
         uid: auth.uid,
         taskId: '',
         amountCent: -amountCent,
-        remark: '提现申请（审核中）',
+        remark: '提现到微信零钱（自动）',
         key: `withdraw:${auth.uid}:${Date.now()}`
       })
     )
-    return C.ok({ amount: C.yuan(amountCent) }, '提现申请已提交，审核通过后到账')
+
+    // 重新读一次钱包，返回客户端最新余额（不要用扣款前的快照去算）
+    const after = await C.ensureWallet(auth.uid)
+    return C.ok(
+      {
+        amount: C.yuan(amountCent),
+        balance: C.yuan(after.balance_cent),
+        auto: true
+      },
+      '提现成功，已自动处理'
+    )
   },
 
   /* ---------------- 图片上传 ---------------- */
@@ -482,6 +577,17 @@ const api = {
     return C.ok(await C.uploadImageBase64(data.base64, { ext: data.ext, dir: data.dir }), '上传成功')
   },
 
+  /**
+   * 服务端读取图片（base64）。
+   * 客户端 <image> 依赖 downloadFile 域名白名单，云存储域名没配就裂图；
+   * 这里让云函数把图取回来，客户端用 data URI 显示 / 预览。
+   */
+  async getImageData(fileID) {
+    const auth = await C.requireAuth(this)
+    await C.rateLimit(auth, 'image', 120, 60 * 1000)
+    return C.ok(await C.imageDataOf(fileID), 'ok')
+  },
+
   /* ---------------- 订单内聊天 ---------------- */
 
   async getChat(taskId, opts = {}) {
@@ -490,11 +596,11 @@ const api = {
     return C.ok(await C.chatMessages(task, auth, opts))
   },
 
-  async sendChat(taskId, content, meta = {}, type = 'text') {
+  async sendChat(taskId, content, meta = {}, type = 'text', thumb = '') {
     const auth = await C.requireAuth(this)
     await C.checkNonce(auth, meta.nonce, meta.timestamp)
     const task = await C.getTask(C.taskIdOf(taskId))
-    return C.ok(await C.chatSend(task, auth, content, { type }), '已发送')
+    return C.ok(await C.chatSend(task, auth, content, { type, thumb }), '已发送')
   },
 
   async chatUnread(taskId) {

@@ -155,9 +155,21 @@ function createEnv(options = {}) {
 
   global.uniCloud = {
     database: () => dbSingleton,
+    // 云存储桩：imageDataOf 会先换临时链接再 httpclient 下载
+    getTempFileURL: async ({ fileList }) => ({
+      fileList: (fileList || []).map((id) => ({
+        fileID: id,
+        tempFileURL: 'https://cdn.test/' + encodeURIComponent(id)
+      }))
+    }),
+    downloadFile: async () => ({ fileContent: Buffer.from('fake-image-bytes') }),
     httpclient: {
       request: async (url, opts) => {
-        state.lastHttp = { url, body: opts.content ? JSON.parse(opts.content) : null }
+        state.lastHttp = { url, body: opts && opts.content ? JSON.parse(opts.content) : null }
+        // 图片下载走二进制桩，其余（微信退款/下单）保持原来的 JSON 桩
+        if (url && url.indexOf('https://cdn.test/') === 0) {
+          return { status: 200, data: Buffer.from('fake-image-bytes') }
+        }
         return options.httpResponse
           ? options.httpResponse(url, opts)
           : { status: 200, data: { refund_id: 'wx-refund-1', status: 'SUCCESS', prepay_id: 'prepay-1' } }

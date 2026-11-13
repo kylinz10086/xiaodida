@@ -63,9 +63,15 @@
     "mobile": { "bsonType": "string", "description": "联系手机号（敏感，按角色脱敏下发）" },
     "wechat_id": { "bsonType": "string", "maxLength": 40, "description": "微信号" },
     "remark": { "bsonType": "string", "maxLength": 200 },
-    "images": { "bsonType": "array", "maxItems": 6, "description": "图片地址列表" },
+    "images": { "bsonType": "array", "maxItems": 6, "description": "图片地址列表（云存储 fileID）" },
+    "image_thumbs": {
+      "bsonType": "array",
+      "description": "与 images 同下标的缩略图 data URI：详情页直接展示，不依赖云存储域名/临时链接"
+    },
     "pick_proof": { "bsonType": "string", "maxLength": 300, "description": "取件留痕图片 fileID" },
     "deliver_proof": { "bsonType": "string", "maxLength": 300, "description": "送达留痕图片 fileID" },
+    "pick_proof_thumb": { "bsonType": "string", "maxLength": 20000, "description": "取件留痕缩略图 data URI" },
+    "deliver_proof_thumb": { "bsonType": "string", "maxLength": 20000, "description": "送达留痕缩略图 data URI" },
 
     "status": { "bsonType": "int", "enum": [1, 2, 3, 4, 5], "description": "1待接单 2进行中 3已完成 4已取消 5售后" },
     "pay_status": {

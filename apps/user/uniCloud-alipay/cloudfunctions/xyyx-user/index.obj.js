@@ -27,7 +27,8 @@ const PUBLISH_ALLOWED = [
   'mobile',
   'wechat_id',
   'remark',
-  'images'
+  'images',
+  'image_thumbs'
 ]
 
 /** 修改订单允许改的字段（和发布一致，但不允许改状态/支付字段） */
@@ -93,10 +94,11 @@ const api = {
   async updateProfile(data = {}) {
     const auth = await C.requireAuth(this)
     await C.checkNonce(auth, data.nonce, data.timestamp)
-    const allowed = C.pick(data, ['nickname', 'avatar', 'mobile'])
+    const allowed = C.pick(data, ['nickname', 'avatar', 'avatar_hd', 'mobile'])
     const patch = {}
     if ('nickname' in allowed) patch.nickname = C.str(allowed.nickname, { max: 20, name: '昵称', required: true })
-    if ('avatar' in allowed) patch.avatar = C.str(allowed.avatar, { max: 300, name: '头像' })
+    if ('avatar' in allowed) patch.avatar = C.avatarValue(allowed.avatar, '头像')
+    if ('avatar_hd' in allowed) patch.avatar_hd = C.avatarValue(allowed.avatar_hd, '高清头像', C.AVATAR_HD_MAX)
     if ('mobile' in allowed) {
       const mobile = C.str(allowed.mobile, { max: 11, name: '手机号' })
       if (mobile) C.assert(/^1\d{10}$/.test(mobile), 400, '手机号格式不对')
@@ -120,6 +122,11 @@ const api = {
     const amountCent = C.toCents(input.amount)
     const profile = await C.ensureProfile(auth.uid)
 
+    const imageIds = Array.isArray(input.images) ? input.images.slice(0, 6).map((x) => String(x).slice(0, 300)) : []
+    // 缩略图和 fileID 一一对应（同下标），只用于展示
+    const imageThumbInput = Array.isArray(input.image_thumbs) ? input.image_thumbs : []
+    const imageThumbs = imageIds.map((id, i) => (id ? C.imageThumb(imageThumbInput[i], { name: '图片缩略图' }) : ''))
+
     const task = {
       title,
       type,
@@ -142,7 +149,8 @@ const api = {
       mobile: C.str(input.mobile || profile.mobile, { max: 11, name: '手机号' }),
       wechat_id: C.str(input.wechat_id, { max: 40, name: '微信号' }),
       remark: C.str(input.remark, { max: 200, name: '备注' }),
-      images: Array.isArray(input.images) ? input.images.slice(0, 6).map((x) => String(x).slice(0, 300)) : [],
+      images: imageIds,
+      image_thumbs: imageThumbs,
       status: C.STATUS.PENDING,
       pay_status: 'unpaid',
       school: C.SCHOOL,
@@ -197,7 +205,7 @@ const api = {
   async getTaskDetail(taskId) {
     const auth = await C.requireAuth(this)
     const task = await C.getTask(C.taskIdOf(taskId))
-    const data = C.taskForUser(task, auth.uid)
+    const data = C.taskForUser(task, auth.uid, { detail: true })
     // 发布者看自己的已完成订单时，告诉前端「评没评过」，按钮才知道要不要出现
     data.reviewed = false
     if (task.publisher_id === auth.uid && task.status === C.STATUS.DONE && task.runner_id) {
@@ -323,6 +331,8 @@ const api = {
     }
     if ('images' in input) {
       patch.images = Array.isArray(input.images) ? input.images.slice(0, 6).map((x) => String(x).slice(0, 300)) : []
+      const thumbInput = Array.isArray(input.image_thumbs) ? input.image_thumbs : []
+      patch.image_thumbs = patch.images.map((id, i) => (id ? C.imageThumb(thumbInput[i], { name: '图片缩略图' }) : ''))
       changed = true
     }
     if ('mobile' in input) {
@@ -632,6 +642,17 @@ const api = {
     return C.ok(await C.uploadImageBase64(data.base64, { ext: data.ext, dir: data.dir }), '上传成功')
   },
 
+  /**
+   * 服务端读取图片（base64）。
+   * 客户端 <image> 依赖 downloadFile 域名白名单，云存储域名没配就裂图；
+   * 这里让云函数把图取回来，客户端用 data URI 显示 / 预览。
+   */
+  async getImageData(fileID) {
+    const auth = await C.requireAuth(this)
+    await C.rateLimit(auth, 'image', 120, 60 * 1000)
+    return C.ok(await C.imageDataOf(fileID), 'ok')
+  },
+
   /* ---------------- 订单内聊天 ---------------- */
 
   /** 拉消息（after>0 为增量轮询）；打开即已读 */
@@ -641,11 +662,11 @@ const api = {
     return C.ok(await C.chatMessages(task, auth, opts))
   },
 
-  async sendChat(taskId, content, meta = {}, type = 'text') {
+  async sendChat(taskId, content, meta = {}, type = 'text', thumb = '') {
     const auth = await C.requireAuth(this)
     await C.checkNonce(auth, meta.nonce, meta.timestamp)
     const task = await C.getTask(C.taskIdOf(taskId))
-    return C.ok(await C.chatSend(task, auth, content, { type }), '已发送')
+    return C.ok(await C.chatSend(task, auth, content, { type, thumb }), '已发送')
   },
 
   async chatUnread(taskId) {

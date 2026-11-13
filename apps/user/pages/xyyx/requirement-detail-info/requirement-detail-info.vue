@@ -148,7 +148,7 @@
 		<view class="detail-section" v-if="taskData.rider && taskData.status >= 2">
 			<view class="section-title">跑腿员</view>
 			<view class="rider-card">
-				<image class="rider-avatar" :src="taskData.rider.avatar || '/static/icon/head1.png'" mode="aspectFill"></image>
+				<image class="rider-avatar" :src="avatarUrl(taskData.rider.avatar)" mode="aspectFill"></image>
 				<view class="rider-main">
 					<text class="rider-name">{{ taskData.rider.nickname || '骑手' }}</text>
 					<text class="rider-meta">{{ riderMeta }}</text>
@@ -275,7 +275,7 @@
 <script>
 	import { mapGetters, mapActions } from 'vuex';
 	import { navigateTo, fmtMoney } from '@/common/rider-util.js';
-	import { getTempUrls } from '@/common/image.js';
+	import { getTempUrls, dataUriToTempFile, fetchImageData } from '@/common/image.js';
 
 	export default {
 		data() {
@@ -335,8 +335,34 @@
 			money(v) {
 				return fmtMoney(v);
 			},
+			/** 头像：只有 data URI / http(s) / 本地静态能直接画，cloud:// 老数据退回默认头像 */
+			avatarUrl(src) {
+				const s = String(src || '')
+				if (!s) return '/static/icon/head1.png'
+				if (s.indexOf('data:image/') === 0 || s.indexOf('http://') === 0 || s.indexOf('https://') === 0) return s
+				if (s.charAt(0) === '/') return s
+				return '/static/icon/head1.png'
+			},
+			/**
+			 * 缩略图映射：服务端在详情接口下发 data URI 缩略图（与 images 同下标），
+			 * 直接画它，不受云存储域名 / 临时链接过期影响。
+			 */
+			thumbOf(id) {
+				const d = this.taskData || {}
+				const ids = d.images || []
+				const i = ids.indexOf(id)
+				if (i >= 0 && d.image_thumbs && d.image_thumbs[i]) return d.image_thumbs[i]
+				if (id && id === d.pick_proof && d.pick_proof_thumb) return d.pick_proof_thumb
+				if (id && id === d.deliver_proof && d.deliver_proof_thumb) return d.deliver_proof_thumb
+				return ''
+			},
 			imageUrl(id) {
-				return this.imageMap[id] || id;
+				const thumb = this.thumbOf(id)
+				if (thumb) return thumb
+				const url = this.imageMap[id]
+				if (url) return url
+				// cloud:// 没换成链接之前不要塞给 <image>，否则就是一张裂图
+				return typeof id === 'string' && id.indexOf('cloud://') === 0 ? '' : id
 			},
 			async resolveImages() {
 				const ids = [
@@ -347,10 +373,52 @@
 				if (!ids.length) return;
 				const map = await getTempUrls(ids);
 				if (Object.keys(map).length) this.imageMap = Object.assign({}, this.imageMap, map);
+				// 临时链接拿不到（域名没配 / 链接过期）→ 云函数取原图，老订单也能显示
+				const missing = ids.filter((id) => !this.imageMap[id] && !this.thumbOf(id));
+				for (const id of missing.slice(0, 3)) {
+					try {
+						const uri = await fetchImageData('user', id);
+						if (uri) this.imageMap = Object.assign({}, this.imageMap, { [id]: uri });
+					} catch (e) {
+						// 单张失败不影响其它图
+					}
+				}
 			},
-			previewProof(id) {
-				const url = this.imageUrl(id);
-				if (url && url.indexOf('cloud://') !== 0) uni.previewImage({ urls: [url], current: url });
+			/** 点开看大图：优先原图（云函数取回），没有再退回缩略图 */
+			async fullUrl(id) {
+				const cached = this.imageMap[id];
+				if (cached) return cached;
+				if (typeof id === 'string' && id.indexOf('cloud://') === 0) {
+					uni.showLoading({ title: '加载原图…', mask: true });
+					try {
+						const uri = await fetchImageData('user', id);
+						if (uri) {
+							this.imageMap = Object.assign({}, this.imageMap, { [id]: uri });
+							return uri;
+						}
+					} catch (e) {
+						// 继续用缩略图
+					} finally {
+						uni.hideLoading();
+					}
+				}
+				return this.thumbOf(id) || '';
+			},
+			async previewProof(id) {
+				const url = (await this.fullUrl(id)) || this.imageUrl(id);
+				if (!url) {
+					uni.showToast({ title: '图片暂时打不开', icon: 'none' });
+					return;
+				}
+				// data URI 先落成本地文件再预览，previewImage 对它支持不稳
+				if (url.indexOf('data:image/') === 0) {
+					const local = await dataUriToTempFile(url);
+					if (local) {
+						uni.previewImage({ urls: [local], current: local });
+						return;
+					}
+				}
+				uni.previewImage({ urls: [url], current: url });
 			},
 			async loadChatUnread() {
 				try {
@@ -523,9 +591,25 @@
 					this.submittingReview = false;
 				}
 			},
-			previewImage(index) {
-				const urls = (this.taskData.images || []).map((id) => this.imageUrl(id));
-				uni.previewImage({ urls, current: urls[index] });
+			async previewImage(index) {
+				const ids = this.taskData.images || [];
+				const targetId = ids[index];
+				// 点开的那张优先取原图（云函数取回），别的图先用缩略图，避免一次拉一堆大图
+				let target = targetId ? (await this.fullUrl(targetId)) || this.imageUrl(targetId) : '';
+				if (!target) {
+					uni.showToast({ title: '图片暂时打不开', icon: 'none' });
+					return;
+				}
+				if (target.indexOf('data:image/') === 0) target = (await dataUriToTempFile(target)) || target;
+				const urls = [];
+				for (const id of ids) {
+					let u = this.imageUrl(id);
+					if (!u) continue;
+					if (u.indexOf('data:image/') === 0) u = (await dataUriToTempFile(u)) || u;
+					urls.push(u);
+				}
+				if (urls.indexOf(target) < 0) urls.push(target);
+				uni.previewImage({ urls, current: target });
 			}
 		}
 	}

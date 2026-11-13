@@ -396,6 +396,44 @@ function int(value, { min = 0, max = 1e9, name = '字段' } = {}) {
   return n
 }
 
+/**
+ * 图片缩略图（data URI）校验。
+ *
+ * 小程序 <image> 加载 http 图片要走 downloadFile 域名白名单，云存储的 CDN 域名
+ * 没配置就整片裂图，临时链接还会过期。所以聊天图片、留痕图片都在发送时
+ * 带一张内嵌的缩略图，展示只靠它；原图另存在云存储，点开预览才用。
+ */
+const IMAGE_THUMB_MAX = 20000
+const IMAGE_THUMB_RE = /^data:image\/(?:jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=\s]+$/
+
+function imageThumb(value, opts = {}) {
+  const v = value === undefined || value === null ? '' : String(value).trim()
+  if (!v) return ''
+  assert(v.length <= (opts.max || IMAGE_THUMB_MAX), 400, `${opts.name || '图片缩略图'}过大`)
+  assert(IMAGE_THUMB_RE.test(v), 400, `${opts.name || '图片缩略图'}格式不对`)
+  return v
+}
+
+/**
+ * 头像取值：压缩后的 data URI（主要形态）、本地静态路径或 http 链接。
+ *
+ * 公众号/小程序头像上传走了两条老路都不通：临时文件路径别人看不到、
+ * cloud:// 需要临时链接且会过期。所以客户端把头像压到 240px 再存成 data URI，
+ * 这里放宽长度上限（24KB）并校验格式，避免又变成「存了个谁也显示不出来的字符串」。
+ */
+const AVATAR_MAX = 16000
+/** 高清头像：只在 getProfile / 我的页用，列表接口不下发 */
+const AVATAR_HD_MAX = 150000
+const AVATAR_RE = /^(?:data:image\/(?:jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=\s]+|\/static\/[^\s]+|https?:\/\/[^\s]+)$/
+
+function avatarValue(value, name = '头像', max = AVATAR_MAX) {
+  const v = value === undefined || value === null ? '' : String(value).trim()
+  if (!v) return ''
+  assert(v.length <= max, 400, `${name}太大，换一张小一点的图片`)
+  assert(AVATAR_RE.test(v), 400, `${name}格式不对`)
+  return v
+}
+
 /** 元 → 分（整数）。金额区间来自配置表，后台可调 */
 function toCents(yuan) {
   const n = Number(yuan)
@@ -559,11 +597,13 @@ async function ensureProfile(uid, patch = {}) {
  * 任务对「用户端」的可见视图
  * 用户看骑手：只给昵称、头像、评分、接单数，绝不给手机号/学校/真名
  */
-function taskForUser(task, viewerId) {
+function taskForUser(task, viewerId, opts = {}) {
   const isPublisher = task.publisher_id === viewerId
   const isRunner = task.runner_id === viewerId
   // 门牌详情/备注属于隐私：只有发布者本人和接单者能看到，游客（大厅里其他人）只看地点名
   const canSeeDetail = isPublisher || isRunner
+  // 缩略图只在详情接口下发：列表里一次几十单，带上 base64 会把返回体撑爆
+  const withThumbs = !!opts.detail && canSeeDetail
   return {
     _id: task._id,
     title: task.title,
@@ -608,9 +648,13 @@ function taskForUser(task, viewerId) {
       : { name: task.destination && task.destination.name, detail: '', latitude: 0, longitude: 0 },
     remark: canSeeDetail ? task.remark : '',
     images: task.images || [],
+    // 图片缩略图（data URI）：详情页直接画，不依赖云存储域名/临时链接
+    image_thumbs: withThumbs ? task.image_thumbs || [] : [],
     // 取件/送达留痕：只有订单双方能看，纠纷时当证据
     pick_proof: canSeeDetail ? task.pick_proof || '' : '',
     deliver_proof: canSeeDetail ? task.deliver_proof || '' : '',
+    pick_proof_thumb: withThumbs ? task.pick_proof_thumb || '' : '',
+    deliver_proof_thumb: withThumbs ? task.deliver_proof_thumb || '' : '',
     create_time: task.create_time,
     pay_time: task.pay_time,
     accept_time: task.accept_time,
@@ -640,11 +684,12 @@ function taskForUser(task, viewerId) {
  * 接单前：不给手机号、不给门牌详情（只给大概位置 + 坐标算距离），不给发布者身份信息
  * 接单后：给完整手机号（要打电话联系）、门牌详情、坐标
  */
-function taskForRider(task, riderId) {
+function taskForRider(task, riderId, opts = {}) {
   const isRunner = task.runner_id === riderId
   // 只有「接单者本人」在订单进行中/完成后才解锁完整地址和联系方式。
   // 只看状态会让别的骑手通过 detail 接口看到别人订单的门牌和备注。
   const accepted = isRunner && (task.status === STATUS.ONGOING || task.status === STATUS.DONE)
+  const withThumbs = !!opts.detail && accepted
 
   // 待接单时 rider_income_cent 还不存在，前端「可赚」会显示 ¥0。
   // 这里按平台抽佣预算出预期收入，已结算的则用真实结算值。
@@ -685,8 +730,11 @@ function taskForRider(task, riderId) {
     origin: place(task.origin),
     destination: place(task.destination),
     images: task.images || [],
+    image_thumbs: withThumbs ? task.image_thumbs || [] : [],
     pick_proof: accepted ? task.pick_proof || '' : '',
     deliver_proof: accepted ? task.deliver_proof || '' : '',
+    pick_proof_thumb: withThumbs ? task.pick_proof_thumb || '' : '',
+    deliver_proof_thumb: withThumbs ? task.deliver_proof_thumb || '' : '',
     remark: accepted ? task.remark || '' : '',
     create_time: task.create_time,
     accept_time: task.accept_time,
@@ -728,6 +776,8 @@ function myProfile(profile) {
     role: profile.role,
     nickname: profile.nickname || '',
     avatar: profile.avatar || '',
+    // 高清头像只在「我的」页用；列表/聊天用压缩过的 avatar，避免返回体过大
+    avatar_hd: profile.avatar_hd || '',
     mobile: profile.mobile || '',
     school: profile.school || SCHOOL,
     real_name: profile.real_name || '',
@@ -1448,9 +1498,75 @@ async function uploadImageBase64(base64, opts = {}) {
 }
 
 /* ------------------------------------------------------------------ */
-/* 订单内聊天（用户 ↔ 骑手）                                            */
+/* 读取图片（服务端中转，解决小程序 downloadFile 域名白名单）            */
 /* ------------------------------------------------------------------ */
 
+/**
+ * 把云存储里的图片读出来，以 base64 返回给客户端。
+ *
+ * 为什么不直接让 <image> 加载临时链接：
+ * 小程序加载网络图片走 downloadFile 域名白名单，云存储 CDN 域名没配置就整片裂图；
+ * 临时链接还会过期。这里由云函数把图片取回来，客户端只走 callFunction 的 request 域名
+ * （这个域名一定配过，否则连登录都做不了），再把 base64 落成本地临时文件显示 / 预览。
+ *
+ * 单张上限 600KB：base64 之后约 800KB，控制在云函数返回值大小限制内。
+ * 超过这个尺寸的图只能看发送时带的缩略图。
+ */
+const IMAGE_BYTES_MAX = 600 * 1024
+const MIME_BY_EXT = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif' }
+
+function extOfPath(p) {
+  const m = String(p || '').split('?')[0].match(/\.([a-zA-Z0-9]{2,5})$/)
+  return m ? m[1].toLowerCase() : 'jpg'
+}
+
+async function downloadUrlAsBuffer(url) {
+  const res = await uniCloud.httpclient.request(url, {
+    method: 'GET',
+    dataType: 'buffer',
+    timeout: 20000
+  })
+  const data = res && res.data
+  if (!data) return null
+  return Buffer.isBuffer(data) ? data : Buffer.from(data)
+}
+
+async function imageDataOf(fileID) {
+  const id = String(fileID || '').trim()
+  assert(id, 400, '缺少图片地址')
+  assert(/^cloud:\/\/\S+$/.test(id) || /^https?:\/\//.test(id), 400, '图片地址不对')
+
+  let buf = null
+  if (/^cloud:\/\//.test(id)) {
+    // 1. 服务端换临时链接，再用 httpclient 下载（三种服务空间都支持）
+    try {
+      const r = await uniCloud.getTempFileURL({ fileList: [id] })
+      const url = r && r.fileList && r.fileList[0] && r.fileList[0].tempFileURL
+      if (url) buf = await downloadUrlAsBuffer(url)
+    } catch (e) {
+      buf = null
+    }
+    // 2. 兜底：云函数端直接下载
+    if (!buf || !buf.length) {
+      const f = await uniCloud.downloadFile({ fileID: id })
+      buf = f && f.fileContent
+    }
+  } else {
+    buf = await downloadUrlAsBuffer(id)
+  }
+
+  assert(buf && buf.length, 404, '图片不存在或已被删除')
+  assert(buf.length <= IMAGE_BYTES_MAX, 413, '图片太大，先看缩略图')
+  return {
+    base64: buf.toString('base64'),
+    mime: MIME_BY_EXT[extOfPath(id)] || 'image/jpeg',
+    size: buf.length
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 订单内聊天（用户 ↔ 骑手）                                            */
+/* ------------------------------------------------------------------ */
 /**
  * 聊天只允许「这一单的发布者」和「这一单的骑手」两个人。
  * 没接单之前骑手端拿不到聊天入口，服务端这里再挡一次。
@@ -1523,6 +1639,8 @@ async function chatMessages(task, auth, opts = {}) {
       from_id: m.from_id,
       content: m.content,
       type: m.type || 'text',
+      // 图片消息自带的缩略图（data URI）；老消息没有这个字段，前端用临时链接兜底
+      thumb: m.thumb || '',
       create_time: m.create_time,
       read_at: m.read_at || 0
     })),
@@ -1548,6 +1666,8 @@ async function chatSend(task, auth, content, opts = {}) {
       ? str(content, { min: 5, max: 300, name: '图片地址', required: true })
       : str(content, { min: 1, max: 300, name: '消息', required: true }).trim()
   assert(text, 400, type === 'image' ? '图片地址不能为空' : '消息不能为空')
+  // 缩略图只对图片消息有意义；文本消息塞进来直接丢弃
+  const thumb = type === 'image' ? imageThumb(opts.thumb) : ''
 
   await rateLimit(auth, 'chat', 30)
 
@@ -1560,12 +1680,14 @@ async function chatSend(task, auth, content, opts = {}) {
     read_at: 0,
     create_time: Date.now()
   }
+  if (thumb) doc.thumb = thumb
   const res = await db.collection(COLL.messages).add(doc)
   return {
     _id: res.id,
     from_id: uid,
     content: text,
     type: doc.type,
+    thumb,
     create_time: doc.create_time,
     read_at: 0
   }
@@ -1690,6 +1812,11 @@ module.exports = {
   pick,
   str,
   int,
+  imageThumb,
+  IMAGE_THUMB_MAX,
+  avatarValue,
+  AVATAR_MAX,
+  AVATAR_HD_MAX,
   toCents,
   yuan,
   maskMobile,
@@ -1734,5 +1861,7 @@ module.exports = {
   chatSend,
   chatSystem,
   chatConversations,
-  uploadImageBase64
+  uploadImageBase64,
+  imageDataOf,
+  IMAGE_BYTES_MAX
 }

@@ -399,10 +399,12 @@
 
 			async picked(item) {
 				if (this.busyId) return
-				const proof = await askProofImage({ role: 'rider' })
-				if (proof === null) return
+				const shot = await askProofImage({ role: 'rider' })
+				if (shot === null) return
+				const proof = shot ? shot.fileID : ''
+				const thumb = shot ? shot.thumb : ''
 				try {
-					await this.markPicked({ taskId: item._id, proof })
+					await this.markPicked({ taskId: item._id, proof, thumb })
 					uni.showToast({ title: '已取件，请尽快送达', icon: 'none' })
 					await this.load()
 				} catch (e) {
@@ -420,10 +422,12 @@
 					confirmColor: '#34C759',
 					success: async (r) => {
 						if (!r.confirm) return
-						const proof = await askProofImage({ role: 'rider' })
-						if (proof === null) return
+						const shot = await askProofImage({ role: 'rider' })
+						if (shot === null) return
+						const proof = shot ? shot.fileID : ''
+						const thumb = shot ? shot.thumb : ''
 						try {
-							const res = await this.markDelivered({ taskId: item._id, proof })
+							const res = await this.markDelivered({ taskId: item._id, proof, thumb })
 							const d = (res && res.data) || {}
 							if (d.settled) {
 								uni.showModal({

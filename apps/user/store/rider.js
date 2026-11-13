@@ -217,9 +217,10 @@ export default {
 		async markPicked({ commit }, payload) {
 			const taskId = typeof payload === 'string' ? payload : payload && payload.taskId
 			const proof = typeof payload === 'string' ? '' : (payload && payload.proof) || ''
+			const thumb = typeof payload === 'string' ? '' : (payload && payload.thumb) || ''
 			commit('SET_BUSY', taskId)
 			try {
-				const res = await api().markPicked(taskId, requestMeta(), proof)
+				const res = await api().markPicked(taskId, requestMeta(), proof, thumb)
 				if (res.code !== 0) throw new Error(res.msg)
 				// 立刻把本地状态推进到「已取件」，不等下一次拉取
 				commit('PATCH_TASK', { id: taskId, patch: { picked_time: (res.data && res.data.picked_time) || Date.now() } })
@@ -236,9 +237,10 @@ export default {
 		async markDelivered({ commit }, payload) {
 			const taskId = typeof payload === 'string' ? payload : payload && payload.taskId
 			const proof = typeof payload === 'string' ? '' : (payload && payload.proof) || ''
+			const thumb = typeof payload === 'string' ? '' : (payload && payload.thumb) || ''
 			commit('SET_BUSY', taskId)
 			try {
-				const res = await api().markDelivered(taskId, requestMeta(), proof)
+				const res = await api().markDelivered(taskId, requestMeta(), proof, thumb)
 				if (res.code !== 0) throw new Error(res.msg)
 				const d = (res.data && res.data) || {}
 				const now = Date.now()
