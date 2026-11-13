@@ -90,6 +90,11 @@ function matches(doc, cond) {
 function applyPatch(doc, patch) {
   for (const [k, v] of Object.entries(patch)) {
     if (v && typeof v === 'object' && '__inc' in v) doc[k] = (doc[k] || 0) + v.__inc
+    else if (v && typeof v === 'object' && '__push' in v) {
+      // uniCloud 的 dbCmd.push：传数组等价于 $each（追加多个元素），传单值追加一个
+      const add = Array.isArray(v.__push) ? v.__push : [v.__push]
+      doc[k] = (Array.isArray(doc[k]) ? doc[k] : []).concat(add)
+    }
     else doc[k] = v
   }
   return doc
@@ -178,6 +183,7 @@ const db = {
     }
   }),
   command: {
+    push: (v) => ({ __push: v }),
     inc: (n) => ({ __inc: n }),
     neq: (v) => ({ __neq: v }),
     lte: (v) => ({ __lte: v }),
@@ -420,7 +426,7 @@ async function main() {
   const storedPaid = tableRows(C.COLL.tasks).find((t) => t._id === task1)
   ok('订单变为已支付', storedPaid.pay_status === 'paid' && storedPaid.pay_time > 0)
   const escrowTx = tableRows(C.COLL.transactions).filter((x) => x.task_id === task1 && x.type === 'escrow_in')
-  ok('只产生 1 条托管入账', escrowTx.length === 1 && escrowTx[0].amount_cent === 850)
+  ok('只产生 1 条托管入账', escrowTx.length === 1 && escrowTx[0].amount_cent === 850, JSON.stringify(escrowTx))
 
   hall = await call(userObj, '', 'listHall', {})
   ok('支付后进入大厅', hall.data.total === 1)
@@ -437,22 +443,22 @@ async function main() {
   /* ---------------- 4. 骑手申请与抢单 ---------------- */
   section('4. 骑手申请、抢单与字段隔离')
 
-  codeIs('骑手资料：姓名过短', await call(riderObj, RIDER1, 'applyRider', { real_name: '王', student_no: '20230001', mobile: '13900001111' }), 400)
+  codeIs('骑手资料：姓名过短', await call(riderObj, RIDER1, 'applyRider', { real_name: '王', student_no: '202512211404009', mobile: '13900001111' }), 400)
   codeIs('骑手资料：学号过短', await call(riderObj, RIDER1, 'applyRider', { real_name: '王小明', student_no: '123', mobile: '13900001111' }), 400)
-  codeIs('骑手资料：手机号错', await call(riderObj, RIDER1, 'applyRider', { real_name: '王小明', student_no: '20230001', mobile: '123' }), 400)
+  codeIs('骑手资料：手机号错', await call(riderObj, RIDER1, 'applyRider', { real_name: '王小明', student_no: '202512211404009', mobile: '123' }), 400)
 
-  const apply1 = await call(riderObj, RIDER1, 'applyRider', { real_name: '王小明', student_no: '20230001', mobile: '13900001111' })
+  const apply1 = await call(riderObj, RIDER1, 'applyRider', { real_name: '王小明', student_no: '202512211404009', mobile: '13900001111' })
   codeIs('第一个骑手申请', apply1, 0)
   ok('冷启动自动通过', apply1.data.status === 2 && apply1.data.auto === true)
 
-  const applyAgain = await call(riderObj, RIDER1, 'applyRider', { real_name: '王小明', student_no: '20230001', mobile: '13900001111' })
+  const applyAgain = await call(riderObj, RIDER1, 'applyRider', { real_name: '王小明', student_no: '202512211404009', mobile: '13900001111' })
   codeIs('已通过再申请', applyAgain, 400)
   codeIs('骑手改资料', await call(riderObj, RIDER1, 'updateProfile', { nickname: '骑手昵称' }), 0)
   ok('骑手昵称已更新', tableRows(C.COLL.users).find((u) => u._id === RIDER1).nickname === '骑手昵称')
   codeIs('骑手同意协议', await call(riderObj, RIDER1, 'acceptAgreement', { version: '1.0.0' }), 0)
   ok('骑手协议留痕', tableRows(C.COLL.agreements).some((a) => a.user_id === RIDER1 && a.role === 'rider'))
 
-  const apply2 = await call(riderObj, RIDER2, 'applyRider', { real_name: '李小红', student_no: '20230002', mobile: '13900002222' })
+  const apply2 = await call(riderObj, RIDER2, 'applyRider', { real_name: '李小红', student_no: '202512211404010', mobile: '13900002222' })
   codeIs('第二个骑手申请', apply2, 0)
   ok('第二个进入审核中', apply2.data.status === 1)
 
@@ -695,6 +701,90 @@ async function main() {
   const allTx = tableRows(C.COLL.transactions)
   ok('所有流水都有幂等键', allTx.every((x) => !!x.idempotency_key))
   ok('幂等键唯一', new Set(allTx.map((x) => x.idempotency_key)).size === allTx.length)
+
+  /* ---------------- 14. 审计 / 风控 / 内容安全（v1.2.0） ---------------- */
+  section('14. 审计日志、风控与内容安全')
+
+  // 前面用例把 publish 的限流窗口用满了，这里清一次，避免误触 429
+  tables.set(C.COLL.limits, [])
+  tables.set(C.COLL.audit, [])
+
+  // 14.1 审计写入与字段
+  const audited = await C.audit(
+    C.AUDIT_ACTION.TASK_SETTLE,
+    { uid: 'u_admin', role: 'admin' },
+    { targetType: 'task', targetId: task1, result: 'ok', detail: { note: 'test' } }
+  )
+  ok('审计写入成功', audited === true)
+  const auditRows = tableRows(C.COLL.audit)
+  ok(
+    '审计字段完整（action/actor/target/result）',
+    auditRows.length === 1 &&
+      auditRows[0].action === 'task.settle' &&
+      auditRows[0].actor_uid === 'u_admin' &&
+      auditRows[0].actor_role === 'admin' &&
+      auditRows[0].target_id === task1 &&
+      auditRows[0].result === 'ok' &&
+      auditRows[0].create_time > 0,
+    JSON.stringify(auditRows[0])
+  )
+
+  // 14.2 审计是旁路：写失败/怪数据都不能把主流程带崩
+  const circular = {}
+  circular.self = circular
+  ok('审计遇到循环引用不抛异常', (await C.audit('audit.circular', { uid: 'u_admin' }, { detail: circular })) === true)
+  ok('超长动作名被截断', (await C.audit('x'.repeat(200), { uid: 'u_admin' }, {})) === true)
+  ok(
+    '超长动作名落库不超过 64 字符',
+    tableRows(C.COLL.audit).filter((a) => a.action.length > 64).length === 0
+  )
+
+  // 14.3 自己给自己刷单（同一手机号）
+  const SAME_MOBILE = '13800001234'
+  const selfTask = await call(userObj, PUB, 'publishTask', { ...base, title: '自刷拦截测试单' })
+  codeIs('发布自刷测试单', selfTask, 0)
+  await call(payObj, PUB, 'mockPaySuccess', selfTask.data.id)
+
+  const riderProfileDoc = tableRows(C.COLL.users).find((u) => u._id === RIDER1)
+  const riderMobileBackup = riderProfileDoc.mobile
+  riderProfileDoc.mobile = SAME_MOBILE
+  const selfGrab = await call(riderObj, RIDER1, 'grabTask', selfTask.data.id)
+  ok('同一手机号抢单被拦', selfGrab.code === 400 && /自己/.test(selfGrab.msg), JSON.stringify(selfGrab))
+  ok(
+    '自刷拦截写了 risk.block 审计',
+    tableRows(C.COLL.audit).some((a) => a.action === 'risk.block' && a.detail && a.detail.type === 'same_mobile')
+  )
+  riderProfileDoc.mobile = riderMobileBackup
+
+  // 14.4 高频取消风控
+  const ABUSER = 'u_abuser'
+  for (let i = 0; i < 5; i++) {
+    const t = await call(userObj, ABUSER, 'publishTask', { ...base, title: '滥用取消测试单' + i })
+    await call(userObj, ABUSER, 'cancelTask', t.data.id, '不想要了')
+  }
+  const abuseBlocked = await call(userObj, ABUSER, 'publishTask', { ...base, title: '风控拦截测试单' })
+  ok('连续取消 5 单后发单被拦', abuseBlocked.code === 403, JSON.stringify(abuseBlocked))
+  const abuserDoc = tableRows(C.COLL.users).find((u) => u._id === ABUSER)
+  ok('账号被写入临时限制', abuserDoc && abuserDoc.banned_until > Date.now())
+
+  // 14.5 封禁账号不能抢单 / 解封后恢复
+  await C.setUserBan(RIDER1, Date.now() + 3600 * 1000, '测试封禁')
+  const bannedGrab = await call(riderObj, RIDER1, 'grabTask', selfTask.data.id)
+  ok('被封禁账号抢单被拒', bannedGrab.code === 403 && /限制/.test(bannedGrab.msg), JSON.stringify(bannedGrab))
+  await C.setUserBan(RIDER1, 0, '')
+  ok('解封后标记清除', !C.isBanned(tableRows(C.COLL.users).find((u) => u._id === RIDER1)))
+
+  // 14.6 内容安全：没配 secret 时必须「跳过」而不是「报错」
+  const skipRes = await C.checkText('u_pub', '正常的一句话', 2)
+  ok('未配置 secret 时内容检查跳过', skipRes.ok === true && skipRes.skipped === true, JSON.stringify(skipRes))
+  const imgBefore = tableRows(C.COLL.moderation).length
+  await C.flagImage('u_pub', 'cloud://test/a.jpg', 2)
+  ok('图片进入人工复核队列', tableRows(C.COLL.moderation).length === imgBefore + 1)
+
+  // 14.7 审计查询倒序
+  const auditList = await C.listAuditLogs({ limit: 5 })
+  ok('审计列表按时间倒序', auditList.list.length > 0 && auditList.list.every((l, i, a) => i === 0 || a[i - 1].create_time >= l.create_time))
+  ok('审计列表带可读时间', !!auditList.list[0].time_text)
 
   /* ---------------- 结果 ---------------- */
   console.log('')

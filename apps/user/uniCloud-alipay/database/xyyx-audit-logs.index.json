@@ -1,0 +1,38 @@
+{
+  "indexes": [
+    {
+      "IndexName": "create_time",
+      "MgoKeySchema": { "MgoIndexKeys": [{ "Name": "create_time", "Direction": "-1" }], "MgoIsUnique": false }
+    },
+    {
+      "IndexName": "action_time",
+      "MgoKeySchema": {
+        "MgoIndexKeys": [
+          { "Name": "action", "Direction": "1" },
+          { "Name": "create_time", "Direction": "-1" }
+        ],
+        "MgoIsUnique": false
+      }
+    },
+    {
+      "IndexName": "actor_time",
+      "MgoKeySchema": {
+        "MgoIndexKeys": [
+          { "Name": "actor_uid", "Direction": "1" },
+          { "Name": "create_time", "Direction": "-1" }
+        ],
+        "MgoIsUnique": false
+      }
+    },
+    {
+      "IndexName": "target_time",
+      "MgoKeySchema": {
+        "MgoIndexKeys": [
+          { "Name": "target_id", "Direction": "1" },
+          { "Name": "create_time", "Direction": "-1" }
+        ],
+        "MgoIsUnique": false
+      }
+    }
+  ]
+}

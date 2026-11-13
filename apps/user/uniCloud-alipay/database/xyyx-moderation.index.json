@@ -1,0 +1,24 @@
+{
+  "indexes": [
+    {
+      "IndexName": "status_time",
+      "MgoKeySchema": {
+        "MgoIndexKeys": [
+          { "Name": "status", "Direction": "1" },
+          { "Name": "create_time", "Direction": "-1" }
+        ],
+        "MgoIsUnique": false
+      }
+    },
+    {
+      "IndexName": "user_time",
+      "MgoKeySchema": {
+        "MgoIndexKeys": [
+          { "Name": "user_id", "Direction": "1" },
+          { "Name": "create_time", "Direction": "-1" }
+        ],
+        "MgoIsUnique": false
+      }
+    }
+  ]
+}

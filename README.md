@@ -11,6 +11,39 @@
 
 ---
 
+## 2026-11-14 · v1.2.0（关后门 / 风控 / 内容安全 / 审计日志 / 灰度准备）
+
+> 版本号按约定从 1.11.8 改成 **1.2.0**（`manifest.json` versionName + `common/version.js`）。
+> 注意：数字上 1.2.0 < 1.11.8，微信后台的版本列表会把它排到旧的后面，上传/体验不受影响。
+
+- **关掉 `pay-notify` 的诊断后门**：原来有个 GET 分支，`?k=<硬编码 key>&reissue=<单号>`
+  能直接触发一笔真实的商家转账，`&addmenu=1` 还能写后台菜单表。
+  该文件不在 gitignore 里，repo 又是公开的 —— 这段已整段删除（141 行 → 46 行），只留回调验签。
+  `reissueWithdraw` 现在只能由后台（`requireAdmin`）调用。
+- **修一个重复记账的 bug**：`mockPaySuccess` 第二次被调时，`pending_pay_no` 已被清空，
+  `out_trade_no` 退回成订单号，幂等判断认不出来，会用新键再记一次 `escrow_in` —— 同一单被记两遍钱。
+  现在复用已记账的那笔单号。（只在 mock 模式可达，但测试套件里就能复现。）
+- **风控（`xyyx-common`）**：
+  - 同一手机号既发单又抢单 → 拦截 + `risk.block` 审计（一个人两个号自己刷单）；
+  - 24 小时内取消 ≥5 单且取消率 ≥50% → 临时限制 2 小时，发单直接拒；
+  - 账号 `banned_until` 生效期（后台可封/解封）；
+  - 新账号大额保护（默认关，`riskNewAccountHours` 打开后生效）；
+  - 全部在写库之前判断，参数走 `xyyx-settings`，后台可调。
+- **内容安全**：接微信 `msg_sec_check` v2，覆盖发单标题/描述/备注、聊天、评价、反馈。
+  默认 `contentCheckMode=log`（**只留档不拦**），看过误报率再在后台切 `block`；
+  没配 appid/secret 或接口异常一律「跳过」，绝不把正常用户卡住。
+  图片暂时进人工复核队列（微信现在只给异步接口，回调地址灰度期还没配）。
+- **审计日志**：新增 `xyyx-audit-logs`，记录后台审核、封禁、改配置、提现、风控拦截、内容违规。
+  写入是旁路，失败不影响主流程；后台可查（`xyyx-admin.listAuditLogs`）。
+- **运维云对象 `xyyx-ops`**：`stats` / `backup`（导出到云存储）/ `purgeBusiness`（默认 dry-run，
+  要 `PURGE-BUSINESS` 口令，只删业务内容、**绝不动账本**）。
+- **部署脚本补漏**：原来只传 4 个云对象，漏了 `xyyx-admin`、`pay-notify`（漏传 pay-notify = 回调打不进来），
+  现在一并上传，并加上新的 `xyyx-ops`。
+- **db_init 补漏**：`xyyx-images` / `xyyx-audit-logs` / `xyyx-moderation` 补进初始化清单（新空间必须建）。
+- `docs/security.md`、`测试目录.md` 同步更新。
+
+---
+
 ## 2026-11-14 · 修「钱到账了但显示失败，还把余额退回去」
 
 - 线上现象：后台一笔 ¥1 提现显示「转账失败：请求中含有未在API文档中定义的参数」，

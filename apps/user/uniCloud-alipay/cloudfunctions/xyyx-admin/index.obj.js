@@ -630,6 +630,11 @@ const api = {
         rider_review_by: auth.uid,
         rider_reject_reason: ''
       })
+      await C.audit(C.AUDIT_ACTION.RIDER_REVIEW, auth, {
+        targetType: 'user',
+        targetId: userId,
+        detail: { action: 'approve', from: profile.rider_status }
+      })
       return C.ok({ status: 2 }, '已通过骑手审核')
     }
 
@@ -640,7 +645,41 @@ const api = {
       rider_review_by: auth.uid,
       rider_reject_reason: reason || '审核未通过'
     })
+    await C.audit(C.AUDIT_ACTION.RIDER_REVIEW, auth, {
+      targetType: 'user',
+      targetId: userId,
+      detail: { action: 'reject', reason: reason || '审核未通过', from: profile.rider_status }
+    })
     return C.ok({ status: 3 }, '已拒绝骑手申请')
+  },
+
+  /**
+   * 审计日志列表（后台「操作记录」页用）
+   * params: { limit, action, uid, targetId, since }
+   */
+  async listAuditLogs(params = {}) {
+    await C.requireAdmin(this)
+    const data = await C.listAuditLogs(params)
+    return C.ok(data)
+  },
+
+  /**
+   * 封禁 / 解封账号
+   * params: { userId, hours, reason }  hours<=0 表示解封
+   */
+  async setUserBan(params = {}) {
+    const auth = await C.requireAdmin(this)
+    const userId = C.str(params.userId, { min: 1, max: 64, name: '用户ID', required: true })
+    C.assert(userId !== auth.uid, 400, '不能封禁自己')
+    const hours = Number(params.hours) || 0
+    const until = hours > 0 ? Date.now() + hours * 3600 * 1000 : 0
+    const patch = await C.setUserBan(userId, until, params.reason)
+    await C.audit(C.AUDIT_ACTION.USER_BAN, auth, {
+      targetType: 'user',
+      targetId: userId,
+      detail: { hours: hours, reason: String(params.reason || '').slice(0, 100), until: patch.banned_until }
+    })
+    return C.ok({ banned_until: patch.banned_until || 0 }, hours > 0 ? '已封禁' : '已解封')
   }
 }
 

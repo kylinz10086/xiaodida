@@ -56,7 +56,24 @@ const DEFAULT_SETTINGS = {
   /** 客服联系方式（展示用，可留空） */
   supportMobile: '',
   /** 公告/下线提示（留空表示正常营业） */
-  notice: ''
+  notice: '',
+
+  /* ---------------- 风控（1.2.0） ---------------- */
+
+  /** 24 小时内取消多少单开始触发取消风控 */
+  riskCancelDailyLimit: 5,
+  /** 取消率超过多少才触发（0~1），光次数多但单量大不算异常 */
+  riskCancelRate: 0.5,
+  /** 同一手机号既发单又接单 = 自己给自己刷单，直接拦 */
+  riskBlockSameMobile: true,
+  /** 新账号保护：注册不足 N 小时且没有完成单时，单笔金额上限（0 = 不限） */
+  riskNewAccountHours: 0,
+  riskNewAccountMaxYuan: 0,
+  /** 内容安全模式：off=不查 / log=只记录不拦 / block=命中就拦 */
+  contentCheckMode: 'log',
+  /** 小程序 access_token 用的 appid/secret（内容安全查违规用，只存服务端） */
+  wxAppid: '',
+  wxAppSecret: ''
 }
 
 const SETTINGS_TTL = 60 * 1000
@@ -86,7 +103,19 @@ function normalizeSettings(raw) {
     grabPerMinute: clampNumber(src.grabPerMinute, d.grabPerMinute, 1, 600),
     abandonPerDay: clampNumber(src.abandonPerDay, d.abandonPerDay, 0, 100),
     supportMobile: String(src.supportMobile || d.supportMobile).slice(0, 20),
-    notice: String(src.notice || d.notice).slice(0, 200)
+    notice: String(src.notice || d.notice).slice(0, 200),
+    riskCancelDailyLimit: clampNumber(src.riskCancelDailyLimit, d.riskCancelDailyLimit, 0, 100),
+    riskCancelRate: clampNumber(src.riskCancelRate, d.riskCancelRate, 0, 1),
+    riskBlockSameMobile:
+      src.riskBlockSameMobile === undefined ? d.riskBlockSameMobile : !!src.riskBlockSameMobile,
+    riskNewAccountHours: clampNumber(src.riskNewAccountHours, d.riskNewAccountHours, 0, 720),
+    riskNewAccountMaxYuan: clampNumber(src.riskNewAccountMaxYuan, d.riskNewAccountMaxYuan, 0, 10000),
+    contentCheckMode:
+      ['off', 'log', 'block'].indexOf(src.contentCheckMode) >= 0
+        ? src.contentCheckMode
+        : d.contentCheckMode,
+    wxAppid: String(src.wxAppid || d.wxAppid).slice(0, 64),
+    wxAppSecret: String(src.wxAppSecret || d.wxAppSecret).slice(0, 128)
   }
 }
 
@@ -184,6 +213,11 @@ async function saveSettings(patch, operator) {
   }
   _settings = merged
   _settingsAt = now
+  await audit(AUDIT_ACTION.SETTINGS_SAVE, { uid: operator || '' }, {
+    targetType: 'settings',
+    targetId: 'app',
+    detail: { changed: Object.keys(patch || {}), merged: merged }
+  })
   return merged
 }
 
@@ -287,7 +321,12 @@ const COLL = {
   images: 'xyyx-images',
   // 提现单：每笔提现一条，记录微信转账状态（待确认/成功/失败），
   // 失败自动冲正余额，后台可核查、可重发。
-  withdrawals: 'xyyx-withdrawals'
+  withdrawals: 'xyyx-withdrawals',
+  // 审计日志：谁在什么时候对谁做了什么（后台操作、退款、提现、风控拦截）。
+  // 只写不删，出问题靠它回溯。schema 同样对客户端全禁。
+  audit: 'xyyx-audit-logs',
+  // 内容安全：命中违规的文本/图片在这里留一份，供人工复核和申诉。
+  moderation: 'xyyx-moderation'
 }
 
 const TX_TYPE = {
@@ -1958,6 +1997,10 @@ async function chatSend(task, auth, content, opts = {}) {
 
   await rateLimit(auth, 'chat', 30)
 
+  // 聊天是违规内容的高发区。默认 log 模式只留档不拦，
+  // 等看过一轮误报率再在后台切 block；图片消息的 content 是 fileID，不查。
+  if (type === 'text') await checkText(uid, text, 4)
+
   const doc = {
     task_id: task._id,
     from_id: uid,
@@ -2066,6 +2109,398 @@ async function chatConversations(uid, limit = 30) {
   return { list }
 }
 
+/* ================================================================== */
+/* 审计日志 · 风控 · 内容安全（v1.2.0）                                  */
+/* ================================================================== */
+
+/**
+ * 审计动作名。用「模块.动作」两段式，后台按前缀筛就行。
+ * 新增动作直接加在这里，别在业务代码里写裸字符串 —— 名字打错就查不到。
+ */
+const AUDIT_ACTION = {
+  RIDER_APPLY: 'rider.apply',
+  RIDER_REVIEW: 'rider.review',
+  USER_BAN: 'user.ban',
+  SETTINGS_SAVE: 'settings.save',
+  PAY_REFUND: 'pay.refund',
+  PAY_WITHDRAW: 'pay.withdraw',
+  PAY_REISSUE: 'pay.reissue',
+  TASK_SETTLE: 'task.settle',
+  TASK_PURGE: 'task.purge',
+  RISK_BLOCK: 'risk.block',
+  CONTENT_RISKY: 'content.risky'
+}
+
+/**
+ * 写一条审计日志。
+ *
+ * 为什么永不抛异常：审计是旁路，不能因为它写失败（集合没建、磁盘满）
+ * 就把支付 / 接单 / 结算这些主流程搞挂。宁可丢一条日志，不能丢一笔钱。
+ */
+async function audit(action, actor, opts) {
+  const o = opts || {}
+  try {
+    const a = actor || {}
+    let detail = o.detail === undefined ? null : o.detail
+    // 单条文档别太大：只留排查需要的，超了就换成摘要
+    try {
+      if (detail !== null && JSON.stringify(detail).length > 2000) {
+        detail = { truncated: true, preview: JSON.stringify(detail).slice(0, 1800) }
+      }
+    } catch (e) {
+      detail = { unevaluable: true }
+    }
+    await db.collection(COLL.audit).add({
+      action: String(action || '').slice(0, 64),
+      actor_uid: String(a.uid || a.actor_uid || '').slice(0, 64),
+      actor_role: String(a.role || '').slice(0, 16),
+      target_type: String(o.targetType || '').slice(0, 32),
+      target_id: String(o.targetId || '').slice(0, 64),
+      result: String(o.result || 'ok').slice(0, 16),
+      detail: detail,
+      create_time: Date.now()
+    })
+    return true
+  } catch (e) {
+    console.warn('[xyyx-audit] 写入失败:', action, e && e.message)
+    return false
+  }
+}
+
+/** 后台读审计日志（新→旧） */
+async function listAuditLogs(params) {
+  const p = params || {}
+  const limit = Math.min(200, Math.max(1, Number(p.limit) || 50))
+  const where = {}
+  if (p.action) where.action = String(p.action)
+  if (p.uid) where.actor_uid = String(p.uid)
+  if (p.targetId) where.target_id = String(p.targetId)
+  if (p.since) where.create_time = dbCmd.gte(Number(p.since) || 0)
+  const res = await db
+    .collection(COLL.audit)
+    .where(where)
+    .orderBy('create_time', 'desc')
+    .limit(limit)
+    .get()
+  return { list: (res.data || []).map((d) => ({
+    _id: d._id,
+    action: d.action,
+    actor_uid: d.actor_uid,
+    actor_role: d.actor_role,
+    target_type: d.target_type,
+    target_id: d.target_id,
+    result: d.result,
+    detail: d.detail,
+    time_text: d.create_time
+      ? new Date(Number(d.create_time) + 8 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19)
+      : '',
+    create_time: d.create_time
+  })) }
+}
+
+/* ---------------- 风控 ---------------- */
+
+const RISK_TYPE = {
+  SAME_MOBILE: 'same_mobile',
+  CANCEL_ABUSE: 'cancel_abuse',
+  NEW_ACCOUNT: 'new_account',
+  BANNED: 'banned'
+}
+
+function digitsOf(v) {
+  return String(v === undefined || v === null ? '' : v).replace(/\D/g, '')
+}
+
+/** 「还有多久解封」的人话描述 */
+function banText(until) {
+  const ms = Number(until) - Date.now()
+  if (ms <= 0) return ''
+  const mins = Math.ceil(ms / 60000)
+  if (mins <= 60) return mins + ' 分钟后再试'
+  return Math.ceil(mins / 60) + ' 小时后再试'
+}
+
+/** 账号是否处于临时限制期 */
+function isBanned(profile) {
+  return !!(profile && Number(profile.banned_until) > Date.now())
+}
+
+/** 最近 N 天的发单 / 取消统计（取消风控的数据来源） */
+async function cancelStats(uid, days) {
+  const since = Date.now() - (Number(days) || 1) * 24 * 3600 * 1000
+  const col = db.collection(COLL.tasks)
+  const totalRes = await col.where({ publisher_id: uid, create_time: dbCmd.gte(since) }).count()
+  const cancelRes = await col
+    .where({ publisher_id: uid, status: STATUS.CANCELLED, create_time: dbCmd.gte(since) })
+    .count()
+  const total = Number(totalRes.total) || 0
+  const cancelled = Number(cancelRes.total) || 0
+  return { total: total, cancelled: cancelled, rate: total ? cancelled / total : 0 }
+}
+
+/**
+ * 发单前风控。
+ * 只拦两件确定性很高的事：账号被临时限制、短时间内大量取消。
+ * 不做「意图猜测」—— 学生改主意取消几单是正常的，误伤比漏放更贵。
+ */
+async function assertPublishRisk(auth) {
+  const s = S()
+  const profile = auth.profile || {}
+
+  if (isBanned(profile)) {
+    throw new BizError(403, '账号暂被限制，' + banText(profile.banned_until))
+  }
+
+  if (!s.riskCancelDailyLimit) return
+  const st = await cancelStats(auth.uid, 1)
+  if (st.cancelled < s.riskCancelDailyLimit) return
+  if (st.rate < s.riskCancelRate) return
+
+  const until = Date.now() + 2 * 3600 * 1000
+  try {
+    await db
+      .collection(COLL.users)
+      .doc(auth.uid)
+      .update({ banned_until: until, ban_reason: '高频取消', update_time: Date.now() })
+  } catch (e) {
+    // 资料表写失败也要拦，只是少了「下次直接拒」的快路径
+  }
+  await audit(AUDIT_ACTION.RISK_BLOCK, auth, {
+    targetType: 'user',
+    targetId: auth.uid,
+    result: 'blocked',
+    detail: { type: RISK_TYPE.CANCEL_ABUSE, cancelled: st.cancelled, total: st.total, rate: st.rate, until: until }
+  })
+  throw new BizError(403, '今天取消次数过多，' + banText(until) + '；有特殊情况请联系客服')
+}
+
+/**
+ * 新账号大额保护（默认关闭：riskNewAccountHours=0）。
+ * 打开后：注册不足 N 小时、且还没有完成单的账号，单笔金额不能超过上限。
+ * 冷启动期建议关着 —— 会把真实新用户挡在门外。
+ */
+async function assertNewAccountRisk(auth, amountYuan) {
+  const s = S()
+  if (!s.riskNewAccountHours || !s.riskNewAccountMaxYuan) return
+  const profile = auth.profile || {}
+  const created = Number(profile.create_time) || 0
+  if (!created) return
+  const young = Date.now() - created < s.riskNewAccountHours * 3600 * 1000
+  const noDone = !Number(profile.accepted_count) && !Number(profile.published_count)
+  if (!young || !noDone) return
+  if (Number(amountYuan) <= s.riskNewAccountMaxYuan) return
+  await audit(AUDIT_ACTION.RISK_BLOCK, auth, {
+    targetType: 'user',
+    targetId: auth.uid,
+    result: 'blocked',
+    detail: { type: RISK_TYPE.NEW_ACCOUNT, amount: Number(amountYuan), cap: s.riskNewAccountMaxYuan }
+  })
+  throw new BizError(400, '新账号单笔最高 ' + s.riskNewAccountMaxYuan + ' 元，完成一单后即可提高')
+}
+
+/** 抢单前风控 */
+async function assertGrabRisk(auth) {
+  const profile = auth.profile || {}
+  if (isBanned(profile)) {
+    throw new BizError(403, '账号暂被限制，' + banText(profile.banned_until))
+  }
+}
+
+/**
+ * 自己给自己刷单的拦截。
+ *
+ * 只比手机号：发单人填的联系电话 == 骑手资料里的手机号。
+ * 为什么用手机号而不是 openid：一个人两个微信号时 openid 不同，
+ * 但跑腿要打电话，手机号是绕不开的现实关联点。
+ */
+async function assertNotSelfDeal(auth, task) {
+  if (!S().riskBlockSameMobile) return
+  if (!task) return
+  const pubMobile = digitsOf(task.mobile)
+  const riderMobile = digitsOf((auth.profile || {}).mobile)
+  if (!pubMobile || !riderMobile || pubMobile !== riderMobile) return
+  await audit(AUDIT_ACTION.RISK_BLOCK, auth, {
+    targetType: 'task',
+    targetId: task._id,
+    result: 'blocked',
+    detail: { type: RISK_TYPE.SAME_MOBILE, publisher_id: task.publisher_id }
+  })
+  throw new BizError(400, '不能接自己发布的订单（联系电话相同）')
+}
+
+/** 人工封禁/解封（后台用） */
+async function setUserBan(uid, untilMs, reason) {
+  const patch = { update_time: Date.now() }
+  if (Number(untilMs) > Date.now()) {
+    patch.banned_until = Number(untilMs)
+    patch.ban_reason = String(reason || '').slice(0, 100)
+  } else {
+    patch.banned_until = 0
+    patch.ban_reason = ''
+  }
+  await db.collection(COLL.users).doc(uid).update(patch)
+  return patch
+}
+
+/* ---------------- 内容安全 ---------------- */
+
+const CONTENT_MODE = { OFF: 'off', LOG: 'log', BLOCK: 'block' }
+
+/** access_token 进程内缓存（有效期 2 小时，提前 5 分钟过期） */
+const _wxToken = { value: '', expire: 0 }
+
+/** 取用户的微信 openid（uni-id-co 存在 wx_openid 对象里，键名各版本不同） */
+async function wxOpenidOf(uid) {
+  try {
+    const res = await db.collection('uni-id-users').doc(uid).get()
+    const user = (res.data && res.data[0]) || {}
+    const wx = user.wx_openid || {}
+    const keys = Object.keys(wx)
+    // 优先小程序端（mp / mp-weixin / mp_<appid>），公众号或 App 的 openid 不能用于小程序内容安全
+    const hit = keys.filter((k) => k === 'mp' || k === 'mp-weixin' || k.indexOf('mp_') === 0 || k.indexOf('mp-weixin_') === 0)
+    return hit.length ? String(wx[hit[0]] || '') : ''
+  } catch (e) {
+    return ''
+  }
+}
+
+/**
+ * 取小程序 access_token。
+ *
+ * 为什么不用 uni-open-bridge：那套要额外配 dcloudAppid + 部署回调，
+ * 灰度期只需要一个「能查违规」的 token。appid/secret 从后台配置里取（只存服务端），
+ * 配不到就返回空 —— 内容安全是尽力而为，不能因为它没配就把正常发单拦住。
+ */
+async function wxAccessToken() {
+  const now = Date.now()
+  if (_wxToken.value && now < _wxToken.expire) return _wxToken.value
+  const s = S()
+  const appid = String(s.wxAppid || '').trim()
+  const secret = String(s.wxAppSecret || '').trim()
+  if (!appid || !secret) return ''
+  try {
+    const url =
+      'https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=' +
+      encodeURIComponent(appid) +
+      '&secret=' +
+      encodeURIComponent(secret)
+    const res = await uniCloud.httpclient.request(url, { method: 'GET', dataType: 'json', timeout: 5000 })
+    const data = (res && res.data) || {}
+    if (!data.access_token) {
+      console.warn('[xyyx-mod] 取 access_token 失败:', data.errcode, data.errmsg)
+      return ''
+    }
+    const ttl = Math.max(60, (Number(data.expires_in) || 7200) - 300)
+    _wxToken.value = String(data.access_token)
+    _wxToken.expire = now + ttl * 1000
+    return _wxToken.value
+  } catch (e) {
+    console.warn('[xyyx-mod] 取 access_token 异常:', e && e.message)
+    return ''
+  }
+}
+
+/** 违规内容留档，供人工复核 / 申诉 */
+async function recordModeration(uid, kind, content, result) {
+  try {
+    const text = String(content || '')
+    await db.collection(COLL.moderation).add({
+      kind: kind || 'text', // text / image
+      user_id: String(uid || ''),
+      content: text.slice(0, 1000),
+      suggest: (result && result.suggest) || '',
+      label: (result && result.label) || 0,
+      errcode: (result && result.errcode) || 0,
+      mode: S().contentCheckMode,
+      status: 'pending', // pending / pass / delete / banned
+      create_time: Date.now()
+    })
+  } catch (e) {
+    console.warn('[xyyx-mod] 留档失败:', e && e.message)
+  }
+}
+
+/**
+ * 文本内容安全检查（微信 msg_sec_check v2）。
+ *
+ * 返回 { ok, skipped, suggest }：
+ *   ok=false 表示命中风险且当前模式是 block；
+ *   任何异常（没配 secret、接口超时、额度用尽）都返回 ok=true + skipped，
+ *   绝不让内容安全把主流程卡死。
+ *
+ * scene: 1 资料 / 2 评论 / 3 论坛 / 4 社交日志
+ */
+async function checkText(uid, content, scene) {
+  const mode = S().contentCheckMode
+  const text = String(content === undefined || content === null ? '' : content).trim()
+  if (mode === CONTENT_MODE.OFF || !text) return { ok: true, skipped: true }
+
+  const token = await wxAccessToken()
+  if (!token) return { ok: true, skipped: true, reason: 'no_token' }
+  const openid = await wxOpenidOf(uid)
+  if (!openid) return { ok: true, skipped: true, reason: 'no_openid' }
+
+  try {
+    const res = await uniCloud.httpclient.request(
+      'https://api.weixin.qq.com/wxa/msg_sec_check?access_token=' + encodeURIComponent(token),
+      {
+        method: 'POST',
+        dataType: 'json',
+        timeout: 5000,
+        headers: { 'Content-Type': 'application/json' },
+        data: {
+          version: 2,
+          openid: openid,
+          scene: Number(scene) || 2,
+          content: text.slice(0, 2500)
+        }
+      }
+    )
+    const data = (res && res.data) || {}
+    const result = data.result || {}
+    const suggest = String(result.suggest || '')
+    // 87014 = 内容含有违法违规内容
+    const risky = Number(data.errcode) === 87014 || suggest === 'risky' || suggest === 'review'
+
+    if (risky) {
+      await recordModeration(uid, 'text', text, {
+        suggest: suggest,
+        label: result.label,
+        errcode: data.errcode
+      })
+      await audit(AUDIT_ACTION.CONTENT_RISKY, { uid: uid, role: 'user' }, {
+        targetType: 'text',
+        result: mode === CONTENT_MODE.BLOCK ? 'blocked' : 'logged',
+        detail: { suggest: suggest, label: result.label, errcode: data.errcode, sample: text.slice(0, 80) }
+      })
+    }
+    if (risky && mode === CONTENT_MODE.BLOCK) {
+      throw new BizError(400, '内容可能不符合平台规范，请修改后再提交')
+    }
+    return { ok: !risky, suggest: suggest, label: result.label || 0, errcode: data.errcode || 0 }
+  } catch (e) {
+    if (e && e.biz) throw e
+    console.warn('[xyyx-mod] 文本检查异常:', e && e.message)
+    return { ok: true, skipped: true, reason: 'api_error' }
+  }
+}
+
+/**
+ * 图片内容安全。
+ *
+ * 微信现在只给异步接口（media_check_async），结果要回调到另一个公网地址；
+ * 灰度期还没配回调，所以这里先做「留档待人工复核」：
+ * 上传就把图记进 yyx-moderation（status=pending），
+ * 后台按 pending 列表抽查/批量过。等接了回调，把结果回写同一条记录即可。
+ */
+async function flagImage(uid, fileID, scene) {
+  if (S().contentCheckMode === CONTENT_MODE.OFF) return { ok: true, skipped: true }
+  const file = String(fileID || '')
+  if (!file) return { ok: true, skipped: true }
+  await recordModeration(uid, 'image', file, { suggest: '', label: 0, errcode: 0 })
+  return { ok: true, pending: true, scene: Number(scene) || 2 }
+}
+
 module.exports = {
   db,
   dbCmd,
@@ -2154,5 +2589,23 @@ module.exports = {
   cleanImageData,
   IMAGE_MAX_BYTES,
   IMAGE_CHUNK,
-  IMAGE_DB_MAX_B64: IMG_DB_MAX_B64
+  IMAGE_DB_MAX_B64: IMG_DB_MAX_B64,
+  // 审计 / 风控 / 内容安全（v1.2.0）
+  AUDIT_ACTION,
+  audit,
+  listAuditLogs,
+  RISK_TYPE,
+  cancelStats,
+  assertPublishRisk,
+  assertNewAccountRisk,
+  assertGrabRisk,
+  assertNotSelfDeal,
+  setUserBan,
+  isBanned,
+  banText,
+  CONTENT_MODE,
+  checkText,
+  flagImage,
+  wxOpenidOf,
+  recordModeration
 }

@@ -164,6 +164,16 @@ const api = {
 
     C.assert(task.mobile && /^1\d{10}$/.test(task.mobile), 400, '请填写正确的手机号，骑手需要联系你')
 
+    // 风控：临时限制 / 高频取消 / 新账号大额。全部在写库之前拦。
+    const actor = { uid: auth.uid, role: auth.role, profile: profile }
+    await C.assertPublishRisk(actor)
+    await C.assertNewAccountRisk(actor, C.yuan(amountCent))
+
+    // 内容安全：标题+描述+备注 合并查一次（少一次外网往返）。
+    // 默认 log 模式（只留档不拦），确认误报率低之后再在后台切成 block。
+    await C.checkText(auth.uid, [title, task.description, task.remark].filter(Boolean).join('\n'), 2)
+    for (const img of imageIds) await C.flagImage(auth.uid, img, 2)
+
     const res = await C.db.collection(C.COLL.tasks).add(task)
     await C.db.collection(C.COLL.users).doc(auth.uid).update({ published_count: C.dbCmd.inc(1) })
     return C.ok({ id: res.id, amount: C.yuan(amountCent) }, '下单成功，请完成支付')
@@ -520,6 +530,9 @@ const api = {
     const exists = await C.db.collection(C.COLL.reviews).where({ task_id: task._id, from_id: auth.uid }).get()
     C.assert(!(exists.data && exists.data.length), 400, '已经评价过了')
 
+    // 评价是所有用户都能看到的公开文本，违规成本最高，场景按「评论」传 2
+    await C.checkText(auth.uid, content, 2)
+
     await C.db.collection(C.COLL.reviews).add({
       task_id: task._id,
       from_id: auth.uid,
@@ -731,6 +744,8 @@ const api = {
       C.assert(!(Number(w.balance_cent) > 0 || Number(w.frozen_cent) > 0), 400, '钱包里还有余额，提现后再申请注销')
       await C.db.collection(C.COLL.users).doc(auth.uid).update({ deletion_requested_at: Date.now() })
     }
+
+    await C.checkText(auth.uid, content, 2)
 
     await C.db.collection('xyyx-feedback').add({
       user_id: auth.uid,

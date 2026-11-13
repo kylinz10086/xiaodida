@@ -233,6 +233,10 @@ const api = {
     // 防止有人拿着 taskId 直接调接口把没付清的单抢走
     C.assert(C.dueCentOf(task) === 0, 400, '该订单还没付清，暂时不能接')
 
+    // 风控：账号限制期 / 自己给自己刷单（同一手机号）。都放在写库之前。
+    await C.assertGrabRisk({ uid: auth.uid, role: auth.role, profile })
+    await C.assertNotSelfDeal({ uid: auth.uid, role: auth.role, profile }, task)
+
     // 限流必须在写库之前：之前放在 update 之后，被限流的骑手会看到「操作太频繁」，
     // 但单其实已经落到他名下了，于是又重新抢一次 → 越抢越乱。
     await C.rateLimit(auth, 'grab', C.S().grabPerMinute)

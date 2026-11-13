@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     一键部署校递达后端到 uniCloud（支付宝云）。
 
@@ -68,7 +68,9 @@ if (-not $SkipCommon) {
 
 # 3. 云对象
 if (-not $SkipFunction) {
-    foreach ($fn in @("xyyx-user", "xyyx-rider", "xyyx-pay", "xyyx-cron")) {
+    # pay-notify 也在这里：它是云函数（不是云对象），但同样要上传；
+    # 漏了它 = 微信支付回调打不进来，钱收了订单不变已付。
+    foreach ($fn in @("xyyx-user", "xyyx-rider", "xyyx-pay", "xyyx-cron", "xyyx-admin", "xyyx-ops", "pay-notify")) {
         Invoke-Cli @("cloud", "functions", "--upload", "cloudfunction", "--prj", $Project, "--provider", $Provider, "--name", $fn)
     }
 }
@@ -76,5 +78,5 @@ if (-not $SkipFunction) {
 Write-Host "`n=== 部署完成 ===" -ForegroundColor Green
 Write-Host "核对：" -ForegroundColor Yellow
 Write-Host "  & `"$cli`" cloud functions --list cloudfunction --prj $Project --provider $Provider --cloud"
-Write-Host "  应看到 xyyx-user / xyyx-rider / xyyx-pay / xyyx-cron"
+Write-Host "  应看到 xyyx-user / xyyx-rider / xyyx-pay / xyyx-cron / xyyx-admin / xyyx-ops / pay-notify"
 Write-Host "`n联调顺序：用户端下单(mock 支付) -> 骑手端抢单/送达 -> 用户端确认收货 -> 查 xyyx-transactions"

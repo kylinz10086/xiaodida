@@ -19,5 +19,9 @@
 	"xyyx-payorders": {},
 	"xyyx-settings": {},
 	"xyyx-messages": {},
-	"xyyx-feedback": {}
+	"xyyx-feedback": {},
+	"xyyx-images": {},
+	"xyyx-withdrawals": {},
+	"xyyx-audit-logs": {},
+	"xyyx-moderation": {}
 }

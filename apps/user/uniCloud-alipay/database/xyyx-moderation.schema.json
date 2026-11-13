@@ -1,0 +1,18 @@
+{
+  "bsonType": "object",
+  "required": ["kind", "user_id", "create_time"],
+  "permission": { "read": false, "create": false, "update": false, "delete": false },
+  "description": "内容安全留档。命中微信内容安全（或待人工复核）的文本/图片在这里留一份，供后台复核与申诉。客户端不可读写。",
+  "properties": {
+    "_id": { "description": "记录ID" },
+    "kind": { "bsonType": "string", "enum": ["text", "image"], "description": "内容类型" },
+    "user_id": { "bsonType": "string", "maxLength": 64, "description": "提交人" },
+    "content": { "bsonType": "string", "maxLength": 1000, "description": "违规文本原文，或图片 fileID" },
+    "suggest": { "bsonType": "string", "maxLength": 16, "description": "微信建议 pass/review/risky" },
+    "label": { "bsonType": "int", "description": "微信返回的违规类别编号" },
+    "errcode": { "bsonType": "int", "description": "微信返回码（87014 = 含违规内容）" },
+    "mode": { "bsonType": "string", "maxLength": 8, "description": "当时的检查模式 off/log/block" },
+    "status": { "bsonType": "string", "enum": ["pending", "pass", "delete", "banned"], "description": "人工复核结果" },
+    "create_time": { "bsonType": "timestamp", "description": "发生时间" }
+  }
+}

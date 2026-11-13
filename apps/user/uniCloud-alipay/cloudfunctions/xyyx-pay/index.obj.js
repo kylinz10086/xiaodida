@@ -948,6 +948,11 @@ const api = {
     const r = await issueTransfer({ uid: auth.uid, amountCent, outBillNo, openid, source: 'user' })
     const state = r.state
     const after = await C.ensureWallet(auth.uid)
+    await C.audit(C.AUDIT_ACTION.PAY_WITHDRAW, auth, {
+      targetType: 'withdraw',
+      targetId: outBillNo,
+      detail: { amount_cent: amountCent, state: state, balance_after: after.balance_cent }
+    })
     return C.ok(
       {
         amount: C.yuan(amountCent),
@@ -1331,8 +1336,14 @@ const api = {
     C.assert(task.publisher_id === auth.uid, 403, '只能支付自己的订单')
 
     // 正常情况下 createJsapiOrder 已经登记了本轮的 pending_pay_no；
-    // 没有的话退回用订单号当 out_trade_no（兼容老流程）
-    const payNo = task.pending_pay_no || id
+    // 没有的话优先复用已记账的那一笔单号（否则退回订单号当 out_trade_no）。
+    //
+    // 为什么不能只写 `pending_pay_no || id`：
+    // 第一次支付成功后 pending_pay_no 会被清空，此时再点一次模拟支付，
+    // out_trade_no 就变成了订单号，markPaid 的幂等判断（按 out_trade_no 找 payments）
+    // 认不出来，会用 `escrow_in:<订单号>` 这个新键再记一次托管入账 —— 同一单被记两遍钱。
+    const paidList = C.paymentsOf(task)
+    const payNo = task.pending_pay_no || (paidList.length ? paidList[paidList.length - 1].no : id)
     const r = await markPaid(payNo, `mock_${Date.now()}`, 'mock')
     return C.ok(r, '支付成功（模拟）')
   },

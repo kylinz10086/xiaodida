@@ -1,0 +1,9 @@
+{
+  "name": "xyyx-ops",
+  "version": "1.0.0",
+  "description": "校递达运维云对象（统计 / 备份 / 清理测试数据），仅管理员可调用",
+  "main": "index.obj.js",
+  "dependencies": {
+    "xyyx-common": "file:../common/xyyx-common"
+  }
+}
