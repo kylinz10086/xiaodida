@@ -643,37 +643,42 @@
 	}
 
 	.img-btn {
-		width: 72rpx;
-		height: 76rpx;
-		line-height: 72rpx;
+		width: 84rpx;
+		height: 84rpx;
+		line-height: 84rpx;
 		text-align: center;
 		font-size: 40rpx;
 		color: #5c6370;
 		background: #f2f3f5;
-		border-radius: 12rpx;
+		border-radius: 16rpx;
 		margin-right: 12rpx;
 		flex-shrink: 0;
 	}
 
+	/**
+	 * 必须显式给 height：微信的 textarea 是原生组件，只写 min-height 时
+	 * 原生层仍按默认高度（约 150px）渲染，会盖住上方的快捷短语，看起来像「框比按钮高一截」。
+	 */
 	.input {
 		flex: 1;
-		min-height: 76rpx;
+		height: 84rpx;
+		min-height: 84rpx;
 		max-height: 260rpx;
 		background: #f2f3f5;
-		border-radius: 12rpx;
-		padding: 18rpx 20rpx;
+		border-radius: 16rpx;
+		padding: 20rpx 22rpx;
 		font-size: 28rpx;
-		line-height: 40rpx;
+		line-height: 44rpx;
 		box-sizing: border-box;
 	}
 
 	.send-btn {
 		margin-left: 14rpx;
-		width: 120rpx;
-		height: 76rpx;
-		line-height: 76rpx;
+		width: 128rpx;
+		height: 84rpx;
+		line-height: 84rpx;
 		text-align: center;
-		border-radius: 12rpx;
+		border-radius: 16rpx;
 		background: #1677ff;
 		color: #fff;
 		font-size: 27rpx;
