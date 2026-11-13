@@ -98,6 +98,11 @@ export default {
 				text: '退款记录',
 				value: '/pages/xyyx/refunds/list'
 			}, {
+				menu_id: "xyyx-withdrawals",
+				icon: 'admin-icons-table',
+				text: '提现记录',
+				value: '/pages/xyyx/withdrawals/list'
+			}, {
 				menu_id: "xyyx-settings",
 				icon: 'admin-icons-gear',
 				text: '系统设置',

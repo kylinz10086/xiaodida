@@ -28,6 +28,49 @@ exports.main = async (event = {}) => {
     try {
       const db = uniCloud.database()
 
+      // ?k=...&menus=1 ：看看后台菜单表里都有什么（排查/补菜单用）
+      if (q.menus) {
+        const r = await db.collection('opendb-admin-menus').limit(300).get()
+        const list = (r.data || []).map((m) => ({
+          _id: m._id,
+          menu_id: m.menu_id,
+          name: m.name,
+          url: m.url || '',
+          parent_id: m.parent_id || '',
+          sort: m.sort,
+          enable: m.enable
+        }))
+        return json(200, { ok: true, total: list.length, list })
+      }
+
+      // ?k=...&addmenu=1 ：在校递达管理下补一个「提现记录」菜单（已存在则跳过）
+      if (q.addmenu) {
+        const URL = '/pages/xyyx/withdrawals/list'
+        const all = await db.collection('opendb-admin-menus').limit(300).get()
+        const rows = all.data || []
+        const exists = rows.find((m) => String(m.url || '') === URL)
+        if (exists) return json(200, { ok: true, skipped: true, menu_id: exists.menu_id })
+
+        // 找兄弟菜单（退款记录），拿它的 parent_id / 排序 / 权限字段照抄
+        const sibling = rows.find((m) => String(m.url || '').indexOf('/pages/xyyx/') === 0 && m.parent_id)
+        const parentId = sibling ? sibling.parent_id : ''
+        const sortBase = rows.filter((m) => m.parent_id === parentId).reduce((mx, m) => Math.max(mx, Number(m.sort) || 0), 0)
+
+        const doc = {
+          menu_id: 'xyyx_withdrawals',
+          name: '提现记录',
+          icon: sibling ? sibling.icon : '',
+          url: URL,
+          sort: sortBase + 1,
+          parent_id: parentId,
+          permission: sibling ? sibling.permission || [] : [],
+          enable: true,
+          create_date: Date.now()
+        }
+        const add = await db.collection('opendb-admin-menus').add(doc)
+        return json(200, { ok: true, added: doc, id: add.id })
+      }
+
       // ?k=...&reissue=<out_bill_no>：用原单号重发一笔失败的提现（后台「重发」等价的自动化）
       if (q.reissue) {
         const pay = uniCloud.importObject('xyyx-pay', { customUI: true })
