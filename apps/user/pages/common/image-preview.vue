@@ -3,16 +3,13 @@
 		<swiper class="pv-swiper" :current="current" @change="onChange" :circular="false">
 			<swiper-item v-for="(it, i) in list" :key="i" class="pv-item">
 				<image class="pv-img" :src="srcOf(it)" mode="aspectFit" @click.stop="close" @error="onImgError(it)"></image>
-				<view class="pv-loading" v-if="it.fileID && loading[it.fileID]">
-					<text>原图加载中…</text>
-				</view>
 			</swiper-item>
 		</swiper>
 
 		<view class="pv-close" @click.stop="close">×</view>
 		<view class="pv-bar" @click.stop>
 			<text class="pv-index">{{ current + 1 }} / {{ list.length }}</text>
-			<text class="pv-tip" @click.stop="retry">{{ tipText }}</text>
+			<text class="pv-tip" v-if="tipText" @click.stop="retry">{{ tipText }}</text>
 		</view>
 	</view>
 </template>
@@ -24,9 +21,9 @@
 	 * 为什么不用 uni.previewImage：它加载本地文件/data URI 时会一直转圈（不同基础库表现还不一样），
 	 * 而 <image> 是确定能画的。
 	 *
-	 * 1.11.0 换成「多路径兜底」：一条路失败就自动换下一条，并把每条路失败的原因显示在底部。
-	 *   直读(data URI)  → 落盘(本地临时文件) → 临时链接(云存储 URL)
-	 * 先画缩略图秒开，原图回来再替换；三条都不行就一直显示缩略图，不会白屏。
+	 * 原图解析交给 resolveImageSrc()：直读(data URI) → 落盘(本地文件) → 临时链接(url)，
+	 * 一条失败自动换下一条。**图片能正常显示时不显示任何提示文字**，
+	 * 只有当前这张确实打不开时才出现「点此重试」。
 	 */
 	import { resolveImageSrc, forgetImageSrc } from '@/common/image.js'
 
@@ -41,17 +38,17 @@
 				// 某个 fileID 上「已经失败过的方式」，重试时跳过它
 				failed: {},
 				method: {},
-				err: ''
+				// 当前这张彻底打不开（三条路都失败）才提示
+				broken: {},
+				// 走的是哪条路（短暂显示后就隐藏，别一直挂着）
+				label: ''
 			}
 		},
 		computed: {
 			tipText() {
-				if (this.err) return this.err + '，点此重试'
-				const k = this.curKey
-				if (k && this.method[k] === 'data') return '原图 · 直读'
-				if (k && this.method[k] === 'file') return '原图 · 本地文件'
-				if (k && this.method[k] === 'url') return '原图 · 临时链接'
-				return '左右滑动 · 点图片关闭'
+				const it = this.list[this.current]
+				if (it && it.fileID && this.broken[it.fileID]) return '点此重试'
+				return this.label
 			},
 			curKey() {
 				const it = this.list[this.current]
@@ -74,17 +71,21 @@
 			},
 			onChange(e) {
 				this.current = (e && e.detail && e.detail.current) || 0
-				this.err = ''
+				this.label = ''
 				this.loadFull(this.current)
 			},
-			/** <image> 画不出来：把这条路径记成失败，自动换下一条 */
+			/**
+			 * <image> 画不出来。
+			 * 只处理「当前这张」：swiper 里其它页的图还在解析中，报错是正常的，不能拿来当失败提示。
+			 */
 			onImgError(it) {
 				if (!it || !it.fileID) return
+				const cur = this.list[this.current]
+				if (!cur || cur.fileID !== it.fileID) return
 				const used = this.method[it.fileID]
 				if (used) this.$set(this.failed, it.fileID, used)
 				this.$delete(this.full, it.fileID)
 				this.$set(this.loading, it.fileID, false)
-				this.err = '原图显示失败'
 				this.loadFull(this.current)
 			},
 			async loadFull(i) {
@@ -102,12 +103,24 @@
 				}
 				this.$set(this.loading, it.fileID, false)
 				if (r.src) {
+					this.$set(this.broken, it.fileID, false)
 					this.$set(this.full, it.fileID, r.src)
 					this.$set(this.method, it.fileID, r.method)
-					this.err = ''
+					this.flashLabel(r.method)
 					return
 				}
-				this.err = (r.errors || []).join('；') || '原图加载失败'
+				// 三条路都失败：如果还有缩略图就先显示缩略图，只留一个「点此重试」
+				this.$set(this.broken, it.fileID, true)
+				this.label = ''
+			},
+			/** 路径提示只闪一下，不长期占屏 */
+			flashLabel(method) {
+				const text = method === 'file' ? '原图' : method === 'url' ? '原图 · 链接' : '原图'
+				this.label = text
+				clearTimeout(this._labelTimer)
+				this._labelTimer = setTimeout(() => {
+					this.label = ''
+				}, 1500)
 			},
 			retry() {
 				const it = this.list[this.current]
@@ -116,10 +129,12 @@
 				this.$delete(this.full, it.fileID)
 				this.$delete(this.failed, it.fileID)
 				this.$delete(this.method, it.fileID)
-				this.err = ''
+				this.$set(this.broken, it.fileID, false)
+				this.label = ''
 				this.loadFull(this.current)
 			},
 			close() {
+				clearTimeout(this._labelTimer)
 				uni.navigateBack({
 					fail: () => uni.redirectTo({ url: '/pages/xyyx/index/index' })
 				})
@@ -153,16 +168,6 @@
 	.pv-img {
 		width: 100vw;
 		height: 100vh;
-	}
-
-	.pv-loading {
-		position: absolute;
-		left: 0;
-		right: 0;
-		bottom: 130rpx;
-		text-align: center;
-		color: rgba(255, 255, 255, 0.5);
-		font-size: 22rpx;
 	}
 
 	.pv-close {
@@ -200,7 +205,7 @@
 
 	.pv-tip {
 		margin-top: 10rpx;
-		color: rgba(255, 255, 255, 0.6);
+		color: rgba(255, 255, 255, 0.5);
 		font-size: 21rpx;
 		text-align: center;
 		padding: 0 40rpx;
