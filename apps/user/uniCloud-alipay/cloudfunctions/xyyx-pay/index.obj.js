@@ -434,16 +434,67 @@ async function wxTransfer(body) {
       if (res.data && typeof res.data === 'object') res.data.wx_variant = i + 1
       return res
     }
+    // 参数报错**不代表钱没出去**：先查一次微信到底有没有这张单，
+    // 有就按真实状态返回，绝不换参数用同一个单号再试（会变成「出错但钱已到账」）。
+    if (i < variants.length - 1) {
+      const probe = await probeBillState(body.out_bill_no)
+      if (probe.known && probe.exists) {
+        return {
+          status: 200,
+          data: Object.assign({}, probe.raw || {}, { state: probe.state, wx_variant: i + 1 })
+        }
+      }
+    }
   }
   return last
 }
 
 async function wxQueryTransfer(outBillNo) {
+  const mock = transferMock()
+  if (mock) {
+    // 离线测试：转账用 mock 时，查单也返回同一套状态，保证「失败→冲正 / 成功→不冲正」都能验到
+    return {
+      status: 200,
+      data:
+        mock === 'fail'
+          ? { state: 'FAIL', fail_reason: '测试模拟转账失败', out_bill_no: outBillNo }
+          : { state: 'SUCCESS', transfer_bill_no: 'mock_' + outBillNo, out_bill_no: outBillNo }
+    }
+  }
   const res = await wxRequest(
     'GET',
     `${TRANSFER_PATH}/out-bill-no/${encodeURIComponent(outBillNo)}?mchid=${PAY_CONFIG.mchid}`
   )
   return { status: res.status, data: res.data || {} }
+}
+
+/**
+ * 查微信那边到底有没有这张转账单 —— 冲正前唯一的依据。
+ *
+ * 踩过的坑：接口返回「请求中含有未在API文档中定义的参数」时，我们当失败把余额退回去了，
+ * 但钱其实已经打出去了（用户微信里到账了，系统显示未到账）。
+ * 所以任何「失败」结论落地前，都必须先问微信：这张单存在吗？状态是什么？
+ *
+ * 返回 { known, exists, state, raw }：
+ *   known=false → 查询本身失败，结论未知，不许冲正
+ *   exists=false → 微信确认没有这张单，可以安全冲正
+ */
+async function probeBillState(no) {
+  try {
+    const r = await wxQueryTransfer(no)
+    const d = (r && r.data) || {}
+    if (Number(r && r.status) === 200 && d.state) {
+      return { known: true, exists: true, state: String(d.state), raw: d }
+    }
+    const code = String(d.code || '')
+    const msg = String(d.message || '')
+    if (/NOT_FOUND|NOT_EXIST|ORDER_NOT_EXIST|BILL_NOT_EXIST/i.test(code) || /不存在|未找到/.test(msg)) {
+      return { known: true, exists: false, state: '', raw: d }
+    }
+    return { known: false, exists: false, state: '', raw: d }
+  } catch (e) {
+    return { known: false, exists: false, state: '', raw: {} }
+  }
 }
 
 /** 转账失败时把提现冲正：余额加回去、累计已提现减掉、补一条退回流水 */
@@ -519,14 +570,21 @@ async function wdPatch(no, patch) {
 
 /**
  * 把微信返回的转账状态落到提现单上。
- * 失败/取消/过期时冲正余额 —— 用 CAS（rolled_back 只能从 false 变 true）保证只退一次，
- * 微信回调、轮询、定时任务三条路同时来也不会重复加钱。
+ *
+ * **铁律：只要微信那边有这张单，就绝不冲正。**
+ * 之前就是「接口报参数错误 → 当失败 → 余额退回」，
+ * 但钱其实已经到账，结果用户微信里收到钱、系统显示失败还把钱退回去了（一笔钱记成两笔）。
+ * 现在所有「失败」结论落地前，先用 probeBillState 问一次微信：
+ *   有单且成功/在途 → 按真实状态落库，不退钱
+ *   有单但确认失败/取消/过期 → 才冲正
+ *   查不到（网络/权限问题）→ 标 pending 等定时任务再对账，不擅自退钱
  */
 async function applyTransferState(doc, data, httpStatus) {
   const no = doc._id
-  const state = String((data && data.state) || '')
+  let state = String((data && data.state) || '')
   const failReason = String((data && (data.fail_reason || data.message)) || '').slice(0, 120)
   const billNo = (data && data.transfer_bill_no) || ''
+  const variant = Number((data && data.wx_variant) || 0)
 
   if (state === 'SUCCESS') {
     await wdPatch(no, {
@@ -534,15 +592,40 @@ async function applyTransferState(doc, data, httpStatus) {
       transfer_bill_no: billNo,
       fail_reason: '',
       finish_time: Date.now(),
-      wx_variant: Number((data && data.wx_variant) || 0)
+      wx_variant: variant
     })
     return 'SUCCESS'
   }
 
   const bad = state === 'FAIL' || state === 'CANCELLED' || state === 'EXPIRED' || (httpStatus && Number(httpStatus) !== 200)
   if (!bad) {
-    await wdPatch(no, { state: state || 'PROCESSING', transfer_bill_no: billNo })
+    await wdPatch(no, { state: state || 'PROCESSING', transfer_bill_no: billNo, wx_variant: variant })
     return state || 'PROCESSING'
+  }
+
+  // ---- 失败结论落地前，先问微信 ----
+  const probe = await probeBillState(no)
+  if (!probe.known) {
+    await wdPatch(no, {
+      state: 'pending',
+      fail_reason: ('待核对：' + (failReason || '微信查询失败')).slice(0, 120)
+    })
+    return 'pending'
+  }
+  if (probe.exists && probe.state) {
+    const ps = probe.state
+    const stillAlive = ps === 'SUCCESS' || WD_IN_FLIGHT.indexOf(ps) >= 0
+    if (stillAlive) {
+      await wdPatch(no, {
+        state: ps,
+        transfer_bill_no: (probe.raw && probe.raw.transfer_bill_no) || billNo,
+        fail_reason: '',
+        wx_variant: variant
+      })
+      return ps
+    }
+    // 微信确认失败/取消/过期 → 允许冲正，用微信给的状态
+    state = ps
   }
 
   let rolled = false
@@ -813,6 +896,92 @@ const api = {
       transfer_bill_no: latest.transfer_bill_no || '',
       package_info: pkg
     })
+  },
+
+  /**
+   * 后台对账：以微信侧状态为准，修正本地提现单。
+   *
+   * 典型场景：接口报错被当成失败、余额退回了，但钱其实已经到账。
+   * 这里查到「确实到账」就把误退的余额扣回来（余额不够就标记人工核账），
+   * 查到「微信侧真没到账」就保持失败，什么也不退。
+   */
+  async reconcileWithdraw(data = {}) {
+    const info = typeof this.getClientInfo === 'function' ? this.getClientInfo() : {}
+    if (!info || info.source === 'client') await C.requireAdmin(this)
+
+    const no = C.str(data.outBillNo, { min: 6, max: 64, name: '提现单号', required: true })
+    const doc = await wdGet(no)
+    C.assert(doc, 404, '提现单不存在')
+
+    const probe = await probeBillState(no)
+    if (!probe.known) return C.ok({ state: doc.state, fixed: false }, '查不到微信侧状态，稍后再试')
+
+    const ps = probe.state
+    const billNo = (probe.raw && probe.raw.transfer_bill_no) || ''
+    const notPaid = !probe.exists || ps === 'FAIL' || ps === 'CANCELLED' || ps === 'EXPIRED'
+
+    if (notPaid) {
+      await wdPatch(no, {
+        state: ps || 'FAIL',
+        fail_reason: doc.fail_reason || '微信侧确认未到账',
+        transfer_bill_no: billNo
+      })
+      return C.ok({ state: ps || 'FAIL', fixed: false, recharged: false }, '微信侧确认这笔没有到账')
+    }
+
+    // 微信侧确实有单：之前如果误退过，把多退的钱扣回来
+    if (doc.rolled_back) {
+      const amountCent = Number(doc.amount_cent) || 0
+      let deducted = false
+      try {
+        const upd = await C.db
+          .collection(C.COLL.wallets)
+          .where({ _id: doc.user_id, balance_cent: C.dbCmd.gte(amountCent) })
+          .update({
+            balance_cent: C.dbCmd.inc(-amountCent),
+            withdrawn_cent: C.dbCmd.inc(amountCent),
+            update_time: Date.now()
+          })
+        deducted = Boolean(upd && upd.updated)
+      } catch (e) {
+        deducted = false
+      }
+
+      if (deducted) {
+        try {
+          await C.db.collection(C.COLL.transactions).add(
+            C.txDoc({
+              type: C.TX_TYPE.WITHDRAW,
+              uid: doc.user_id,
+              taskId: '',
+              amountCent: -amountCent,
+              remark: '提现对账补扣（钱已到账，撤回误退）',
+              key: `withdraw-reconcile:${no}`
+            })
+          )
+        } catch (e) {}
+        await wdPatch(no, {
+          state: ps,
+          rolled_back: false,
+          fail_reason: '',
+          transfer_bill_no: billNo,
+          reconciled: true,
+          finish_time: ps === 'SUCCESS' ? Date.now() : doc.finish_time || 0
+        })
+        return C.ok({ state: ps, fixed: true, recharged: true }, '已对账：钱确实到账，已撤回误退的余额')
+      }
+
+      await wdPatch(no, {
+        state: ps,
+        fail_reason: '已到账，但余额不足无法撤回误退，需人工核账',
+        transfer_bill_no: billNo,
+        reconciled: true
+      })
+      return C.ok({ state: ps, fixed: true, recharged: false }, '已到账；余额不足，需人工核账')
+    }
+
+    await wdPatch(no, { state: ps, fail_reason: '', transfer_bill_no: billNo, reconciled: true })
+    return C.ok({ state: ps, fixed: true, recharged: false }, '已按微信状态更新')
   },
 
   /** 我的提现记录（钱包页显示最近几笔的状态） */

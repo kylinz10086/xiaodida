@@ -80,7 +80,9 @@
 					<uni-td align="center">
 						<button v-if="item.can_retry" class="uni-button" type="warn" size="mini"
 							@click="retry(item)">重发</button>
-						<text v-else class="muted">-</text>
+						<button v-if="!item.legacy" class="uni-button recon" type="default" size="mini"
+							@click="reconcile(item)">对账</button>
+						<text v-if="item.legacy" class="muted">-</text>
 					</uni-td>
 				</uni-tr>
 			</uni-table>
@@ -184,6 +186,30 @@
 					uni.showModal({ title: '同步失败', content: e.message || '请稍后再试', showCancel: false })
 				}
 			},
+			/** 对账：以微信侧状态为准，修「钱到了但显示失败」 */
+			async reconcile(item) {
+				uni.showLoading({ title: '向微信核对中…', mask: true })
+				try {
+					const res = await api().reconcileWithdraw({ outBillNo: item.out_bill_no || item._id })
+					uni.hideLoading()
+					if (res.code !== 0) throw new Error(res.msg)
+					const d = res.data || {}
+					uni.showModal({
+						title: '对账结果',
+						content:
+							(res.msg || '已对账') +
+							'\n微信状态：' +
+							(d.state || '-') +
+							(d.recharged ? '\n已把误退的余额扣回（用户实际已到账）' : ''),
+						showCancel: false
+					})
+					await this.load()
+				} catch (e) {
+					uni.hideLoading()
+					uni.showModal({ title: '对账失败', content: e.message || '请稍后再试', showCancel: false })
+				}
+			},
+			/** 重发一笔失败提现 */
 			async retry(item) {
 				const ok = await new Promise((resolve) => {
 					uni.showModal({
@@ -285,6 +311,7 @@
 	}
 
 	.amount { color: #eb5757; font-weight: 600; }
+	.recon { margin-left: 6px; }
 	.mono { font-family: Consolas, monospace; font-size: 12px; color: #666; }
 	.reason { font-size: 12px; color: #eb5757; }
 	.ip {
