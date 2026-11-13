@@ -106,7 +106,10 @@
 					this.$set(this.broken, it.fileID, false)
 					this.$set(this.full, it.fileID, r.src)
 					this.$set(this.method, it.fileID, r.method)
-					this.flashLabel(r.method)
+					if (i === this.current) this.flashLabel(r.method)
+					// 预取左右两张：滑过去时基本是秒开
+					this.loadFull(i + 1)
+					this.loadFull(i - 1)
 					return
 				}
 				// 三条路都失败：如果还有缩略图就先显示缩略图，只留一个「点此重试」

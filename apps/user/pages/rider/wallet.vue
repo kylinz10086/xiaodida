@@ -20,7 +20,7 @@
 		<view class="card">
 			<view class="card-title">
 				<text>申请提现</text>
-				<text class="card-extra">最低 3 元</text>
+				<text class="card-extra">最低 {{ minWithdraw }} 元</text>
 			</view>
 
 			<view class="withdraw-row">
@@ -94,7 +94,8 @@
 				amount: '',
 				submitting: false,
 				withdrawals: [],
-				// 与云函数 xyyx-rider 里的风控常量保持一致
+				// 与云函数里的风控常量保持一致（1.11.3 起 1 元起提）
+				minWithdraw: 1,
 				maxWithdraw: 200,
 				maxDaily: 500
 			}
@@ -107,7 +108,7 @@
 			},
 			quickAmounts() {
 				const balance = Number(this.wallet.balance) || 0
-				const list = [3, 5, 10].filter((n) => n <= balance)
+				const list = [1, 3, 5, 10].filter((n) => n <= balance)
 				return list
 			},
 			/** 提现状态 → 颜色类名（模板里不能直接调方法，走映射表） */
@@ -195,8 +196,8 @@
 
 			fillAll() {
 				const balance = Number(this.wallet.balance) || 0
-				if (balance < 3) {
-					uni.showToast({ title: '余额不足 3 元', icon: 'none' })
+				if (balance < this.minWithdraw) {
+					uni.showToast({ title: `余额不足 ${this.minWithdraw} 元`, icon: 'none' })
 					return
 				}
 				// 单笔有上限，超过就只填到上限，剩下的下次再提
@@ -206,7 +207,7 @@
 			async withdraw() {
 				if (this.submitting) return
 				const n = Number(this.amount)
-				if (!(n >= 3)) return uni.showToast({ title: '最低提现 3 元', icon: 'none' })
+				if (!(n >= this.minWithdraw)) return uni.showToast({ title: `最低提现 ${this.minWithdraw} 元`, icon: 'none' })
 				if (n > this.maxWithdraw) return uni.showToast({ title: `单笔最多 ${this.maxWithdraw} 元`, icon: 'none' })
 				if (n > (Number(this.wallet.balance) || 0)) return uni.showToast({ title: '超出可提现余额', icon: 'none' })
 

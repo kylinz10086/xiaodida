@@ -161,9 +161,11 @@ async function main() {
   eq(badImg.code, 400, '非法地址被拒')
 
   console.log('\n[9] 图片字节直存数据库（1.11.0，看图不碰云存储）')
+  // 400KB → base64 约 546KB：既能进库（≤620KB），又必须按 400KB 切成 2 片，
+  // 正好验证分片 / 4 字符对齐 / 拼接
   const bigBuf = Buffer.concat([
     Buffer.from([0xff, 0xd8]),
-    Buffer.alloc(300 * 1024, 7),
+    Buffer.alloc(400 * 1024, 7),
     Buffer.from([0xff, 0xd9])
   ])
   const bigB64 = bigBuf.toString('base64')

@@ -45,8 +45,10 @@ const DEFAULT_SETTINGS = {
   /** 订单金额区间（元） */
   minOrderYuan: 1,
   maxOrderYuan: 1000,
-  /** 单笔提现下限（元） */
-  minWithdrawYuan: 3,
+  /** 单笔提现下限（元）
+   *  1.11.3 起从 3 元降到 1 元：学生单笔收入常常就几块钱，3 元门槛等于提不出来。
+   *  真正的风控不靠这个门槛，靠单笔上限 / 单日次数 / 单日累计 / 冷却。 */
+  minWithdrawYuan: 1,
   /** 抢单频率限制：每分钟最多几次 */
   grabPerMinute: 30,
   /** 放弃订单限制：每天最多几次 */
@@ -58,6 +60,8 @@ const DEFAULT_SETTINGS = {
 }
 
 const SETTINGS_TTL = 60 * 1000
+/** 配置结构版本：改了默认值、又需要老配置跟着变时 +1，loadSettings 里做一次性迁移 */
+const SETTINGS_VERSION = 2
 let _settings = null
 let _settingsAt = 0
 
@@ -110,7 +114,13 @@ async function loadSettings(force) {
       await db
         .collection(COLL.settings)
         .doc('app')
-        .set({ ..._settings, create_time: now, update_time: now, update_by: 'system' })
+        .set({
+          ..._settings,
+          settings_version: SETTINGS_VERSION,
+          create_time: now,
+          update_time: now,
+          update_by: 'system'
+        })
         .catch(() => {})
     } else if (doc.update_by === 'system' && !sameSettings(doc, DEFAULT_SETTINGS)) {
       // 这条是系统自动种下的、没人改过 → 代码默认值变了就跟着刷新
@@ -119,10 +129,30 @@ async function loadSettings(force) {
       await db
         .collection(COLL.settings)
         .doc('app')
-        .set({ ..._settings, create_time: doc.create_time || now, update_time: now, update_by: 'system' })
+        .set({
+          ..._settings,
+          settings_version: SETTINGS_VERSION,
+          create_time: doc.create_time || now,
+          update_time: now,
+          update_by: 'system'
+        })
         .catch(() => {})
     } else {
       _settings = normalizeSettings(doc)
+      // 后台保存过的配置不会被代码默认值覆盖，所以「改了默认值要生效」得走一次性迁移。
+      // 这里只动需要变的项，管理员调过的其它配置原样保留。
+      if (Number(doc.settings_version) < SETTINGS_VERSION) {
+        _settings.minWithdrawYuan = 1
+        await db
+          .collection(COLL.settings)
+          .doc('app')
+          .update({
+            minWithdrawYuan: 1,
+            settings_version: SETTINGS_VERSION,
+            update_time: now
+          })
+          .catch(() => {})
+      }
     }
   } catch (e) {
     // 集合不存在 / 网络异常：退回默认值，并推后缓存时间，避免每次都撞库
@@ -1666,8 +1696,10 @@ async function loadImageBuffer(id) {
 
 /** base64 超过这个长度就不进库了（文档太大不划算，改走云存储兜底） */
 const IMG_DB_MAX_B64 = 620000
-/** 直存路径的分片长度：必须是 4 的倍数（base64 每 4 个字符一组，切开才能直接拼接） */
-const IMG_DB_CHUNK = 160000
+/** 直存路径的分片长度：必须是 4 的倍数（base64 每 4 个字符一组，切开才能直接拼接）
+ *  1.11.3 从 160KB 提到 400KB：大多数聊天图（200~400KB）一次往返就取完，
+ *  加上客户端并发取剩余分片，大图从 5 次串行（3~5 秒）压到 1~2 次往返。 */
+const IMG_DB_CHUNK = 400000
 /** 直存记录保留天数，cron 里清理 */
 const IMG_DB_KEEP_DAYS = 120
 

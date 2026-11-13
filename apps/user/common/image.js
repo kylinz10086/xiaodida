@@ -123,43 +123,84 @@ async function pickAvatar(filePath, sizes, maxLen) {
 }
 
 /**
- * 通过云对象把云存储里的原图读成 data URI。
+ * 通过云对象把图读成 data URI。
  *
  * 小程序 <image> 走 downloadFile 域名白名单，云存储 CDN 域名没配就整片裂图；
  * 临时链接还会过期。callFunction 用的是 request 域名（登录都靠它，一定配过），
- * 所以兜底走云函数取图，客户端拿到 base64 再显示 / 预览。
+ * 所以走云函数取图，客户端拿到 base64 再显示 / 预览。
  *
- * 云函数返回值有大小上限，所以服务端按 192KB 分片返回，这里循环拼接 ——
- * 大图也能看，不受单次返回大小限制。
+ * 云函数返回值有大小上限，服务端按分片返回。1.11.3 起：
+ *   - 单片 400KB（大多数图一次往返就拿完）；
+ *   - 需要多片时，**剩余分片并发取**（并发 4），大图从 5 次串行压到 1~2 次往返。
  */
+const B64_CONCURRENCY = 4
+
+/** base64 长度 = 4 * ceil(字节数 / 3)，用来算总共要取几片 */
+function b64LenOfBytes(n) {
+	const bytes = Number(n) || 0
+	if (bytes <= 0) return 0
+	return Math.ceil(bytes / 3) * 4
+}
+
 export async function fetchImageData(role, fileID, onProgress) {
 	const id = String(fileID || '').trim()
 	if (!/^cloud:\/\//.test(id) && !/^https?:\/\//.test(id)) return ''
 	const api = apiOf(role)
-	const parts = []
-	let offset = 0
-	let mime = 'image/jpeg'
-	let size = 0
-	let source = ''
-	for (let i = 0; i < 80; i++) {
-		const res = await api.getImageData(id, offset)
-		if (!res || res.code !== 0) throw new Error((res && res.msg) || '图片读取失败')
-		const d = res.data || {}
-		if (!d.base64) throw new Error('图片读取失败')
-		parts.push(d.base64)
-		mime = d.mime || mime
-		size = d.size || size
-		source = d.source || source
-		if (typeof onProgress === 'function') onProgress(offset, size)
-		// 兼容旧版云函数：只返回整张图，没有分片字段
-		if (d.chunk === undefined || d.done === undefined) break
-		// 服务端会告诉我们下一片从哪开始（base64 分片必须 4 字符对齐）
-		offset = Number(d.offset) + Number(d.chunk)
-		if (d.done) break
-		if (!d.chunk) throw new Error('图片分片异常')
+
+	const first = await api.getImageData(id, 0)
+	if (!first || first.code !== 0) throw new Error((first && first.msg) || '图片读取失败')
+	const d0 = first.data || {}
+	if (!d0.base64) throw new Error('图片读取失败')
+	const mime = d0.mime || 'image/jpeg'
+
+	// 兼容旧版云函数：一次返回整张
+	if (d0.chunk === undefined || d0.done === undefined || d0.done) {
+		return 'data:' + mime + ';base64,' + d0.base64
 	}
-	const uri = 'data:' + mime + ';base64,' + parts.join('')
-	return uri
+
+	const unit = Number(d0.chunk) || 0
+	const total = b64LenOfBytes(d0.size)
+	if (!unit || !total || total <= unit) {
+		// 算不出总长就退回串行，稳一点
+		const parts = [d0.base64]
+		let offset = Number(d0.offset) + unit
+		for (let i = 0; i < 80; i++) {
+			const res = await api.getImageData(id, offset)
+			if (!res || res.code !== 0 || !res.data || !res.data.base64) {
+				throw new Error((res && res.msg) || '图片读取失败')
+			}
+			parts.push(res.data.base64)
+			offset = Number(res.data.offset) + Number(res.data.chunk)
+			if (res.data.done) break
+			if (!res.data.chunk) throw new Error('图片分片异常')
+		}
+		return 'data:' + mime + ';base64,' + parts.join('')
+	}
+
+	const offsets = []
+	for (let off = unit; off < total; off += unit) offsets.push(off)
+	const got = new Array(offsets.length)
+	let cursor = 0
+	let loaded = unit
+	if (typeof onProgress === 'function') onProgress(loaded, total)
+
+	const worker = async () => {
+		while (cursor < offsets.length) {
+			const my = cursor++
+			const res = await api.getImageData(id, offsets[my])
+			if (!res || res.code !== 0 || !res.data || !res.data.base64) {
+				throw new Error((res && res.msg) || '图片读取失败')
+			}
+			got[my] = res.data.base64
+			loaded += String(res.data.base64).length
+			if (typeof onProgress === 'function') onProgress(Math.min(loaded, total), total)
+		}
+	}
+	const workers = []
+	for (let i = 0; i < Math.min(B64_CONCURRENCY, offsets.length); i++) workers.push(worker())
+	await Promise.all(workers)
+
+	return 'data:' + mime + ';base64,' + [d0.base64].concat(got).join('')
 }
 
 /** 最近解出来的图片地址缓存：同一个 fileID 不重复取（预览和气泡共用） */

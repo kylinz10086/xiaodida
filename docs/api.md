@@ -73,7 +73,7 @@
 | `abandonTask(taskId, reason)` | | 放弃，订单回到大厅 |
 | `listMyJobs(params)` | `{status?}` | 我的任务 |
 | `getWallet()` | — | 余额 + 最近 50 条流水 |
-| `requestWithdraw(data)` | `{amount}` | 提现（自动处理，不再人工审核）。最低 3 元、单笔 ≤200 元、每天 ≤5 次、单日累计 ≤500 元、两次间隔 10 分钟 |
+| `requestWithdraw(data)` | `{amount}` | 提现（自动处理，不再人工审核）。最低 1 元、单笔 ≤200 元、每天 ≤5 次、单日累计 ≤500 元、两次间隔 10 分钟 |
 | `listChats()` | — | 骑手侧会话列表 |
 | `getChat(taskId, opts)` | `{after?}` | 拉消息（只允许该单骑手本人） |
 | `sendChat(taskId, content, meta, type)` | `type='text'\|'image'` | 发消息 |

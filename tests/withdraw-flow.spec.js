@@ -62,8 +62,8 @@ async function main() {
 
   console.log('\n[2] 金额校验')
   setUid('rider-1')
-  const tooSmall = await call(payObj.requestWithdraw, { amount: 2, ...meta() })
-  eq(tooSmall.code, 400, '低于 3 元被拒')
+  const tooSmall = await call(payObj.requestWithdraw, { amount: 0.5, ...meta() })
+  eq(tooSmall.code, 400, '低于 1 元被拒')
   const tooBig = await call(payObj.requestWithdraw, { amount: 300, ...meta() })
   eq(tooBig.code, 400, '单笔超过 200 元被拒')
 
