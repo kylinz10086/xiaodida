@@ -16,12 +16,11 @@
 				<text class="notice-title">提现已接微信「商家转账到零钱」，状态实时可查</text>
 				<text class="notice-desc">
 					骑手点提现 → 系统扣余额并发起转账 → 微信返回「待确认收款」时，骑手要在微信里点确认，钱才进零钱。
-					转账失败/取消/过期会自动把金额退回骑手余额（标记「已退回」），不会出现扣了钱没到账。
-					失败的单子确认余额已退回后，可以在这里点「重发」再来一次。
-					如果失败原因写「此IP地址不允许调用接口」，点右上角「查出口IP」，把查到的 IP 全部加到
+					系统每 10 分钟自动对账：微信侧失败的会把金额退回余额；如果微信侧其实已到账
+					（出现过接口报错但钱已到账的情况），会自动改回「已到账」并扣回误退的余额，
+					不会出现「钱到账了但可提现余额没扣」。想立刻刷新状态就点「同步在途状态」。
+					失败原因里如果写「此IP地址不允许调用接口」，点右上角「查出口IP」，把查到的 IP 全部加到
 					微信商户平台 → 产品中心 → 商家转账 → 接口安全IP。
-					注意：云函数出口 IP 会变。想一劳永逸，用 tools/wechat-relay.cjs 在固定 IP 的服务器上做转发，
-					之后微信只看到那台机器的 IP，白名单配一次就长期有效。
 				</text>
 			</view>
 
@@ -57,7 +56,6 @@
 					<uni-th align="center" width="160">时间</uni-th>
 					<uni-th align="center" width="230">提现单号</uni-th>
 					<uni-th align="center" width="200">失败原因</uni-th>
-					<uni-th align="center" width="110">操作</uni-th>
 				</uni-tr>
 				<uni-tr v-for="item in list" :key="item._id">
 					<uni-td align="center">{{ item.nickname }}</uni-td>
@@ -74,17 +72,7 @@
 					</uni-td>
 					<uni-td align="center">
 						<text class="reason">{{ item.fail_reason || '-' }}</text>
-						<text class="hint" v-if="needTopup(item.fail_reason)">运营账户没钱 → 充值后点重发（原单号）</text>
 						<text class="ip" v-if="item.egress_ip">IP {{ item.egress_ip }}</text>
-					</uni-td>
-					<uni-td align="center">
-						<button v-if="item.can_retry" class="uni-button" type="warn" size="mini"
-							@click="retry(item)">重发</button>
-						<button v-if="!item.legacy" class="uni-button recon" type="default" size="mini"
-							@click="reconcile(item)">对账</button>
-						<button v-if="!item.legacy && item.state !== 'SUCCESS'" class="uni-button recon" type="success"
-							size="mini" @click="markPaid(item)">标记已到账</button>
-						<text v-if="item.legacy" class="muted">-</text>
 					</uni-td>
 				</uni-tr>
 			</uni-table>
@@ -118,11 +106,6 @@
 			this.load()
 		},
 		methods: {
-			/** 资金不足：微信提示「商户运营账户资金不足」，充值后原单号重试即可 */
-			needTopup(reason) {
-				const s = String(reason || '')
-				return s.indexOf('资金不足') >= 0 || s.indexOf('余额不足') >= 0 || s.indexOf('运营账户') >= 0
-			},
 			stateClass(s) {
 				if (s === 'SUCCESS') return 'ok'
 				if (s === 'WAIT_USER_CONFIRM') return 'wait'
@@ -186,84 +169,6 @@
 				} catch (e) {
 					uni.hideLoading()
 					uni.showModal({ title: '同步失败', content: e.message || '请稍后再试', showCancel: false })
-				}
-			},
-			/** 人工标记已到账：微信查询被 IP 白名单挡住时的兜底 */
-			async markPaid(item) {
-				const ok = await new Promise((resolve) => {
-					uni.showModal({
-						title: '标记为已到账',
-						content:
-							`确认「${item.nickname}」这笔 ¥${item.amount} 确实已到账？\n` +
-							'系统会把状态改成已到账；如果之前误退过余额，会把这笔钱扣回来。',
-						success: (r) => resolve(Boolean(r.confirm))
-					})
-				})
-				if (!ok) return
-				uni.showLoading({ title: '处理中…', mask: true })
-				try {
-					const res = await api().markWithdrawPaid({ outBillNo: item.out_bill_no || item._id })
-					uni.hideLoading()
-					if (res.code !== 0) throw new Error(res.msg)
-					const d = res.data || {}
-					uni.showModal({
-						title: '已标记',
-						content: (res.msg || '已标记为已到账') + (d.recharged ? '\n已撤回误退的余额' : ''),
-						showCancel: false
-					})
-					await this.load()
-				} catch (e) {
-					uni.hideLoading()
-					uni.showModal({ title: '操作失败', content: e.message || '请稍后再试', showCancel: false })
-				}
-			},
-			/** 对账：以微信侧状态为准，修「钱到了但显示失败」 */
-			async reconcile(item) {
-				uni.showLoading({ title: '向微信核对中…', mask: true })
-				try {
-					const res = await api().reconcileWithdraw({ outBillNo: item.out_bill_no || item._id })
-					uni.hideLoading()
-					if (res.code !== 0) throw new Error(res.msg)
-					const d = res.data || {}
-					uni.showModal({
-						title: '对账结果',
-						content:
-							(res.msg || '已对账') +
-							'\n微信状态：' +
-							(d.state || '-') +
-							(d.recharged ? '\n已把误退的余额扣回（用户实际已到账）' : ''),
-						showCancel: false
-					})
-					await this.load()
-				} catch (e) {
-					uni.hideLoading()
-					uni.showModal({ title: '对账失败', content: e.message || '请稍后再试', showCancel: false })
-				}
-			},
-			/** 重发一笔失败提现 */
-			async retry(item) {
-				const ok = await new Promise((resolve) => {
-					uni.showModal({
-						title: '重发这笔提现',
-						content: `给「${item.nickname}」重新打款 ¥${item.amount}？请确认金额已经退回他的余额。`,
-						success: (r) => resolve(Boolean(r.confirm))
-					})
-				})
-				if (!ok) return
-				uni.showLoading({ title: '重发中…', mask: true })
-				try {
-					const res = await api().reissueWithdraw({ outBillNo: item.out_bill_no || item._id })
-					uni.hideLoading()
-					if (res.code !== 0) throw new Error(res.msg)
-					uni.showModal({
-						title: '已重发',
-						content: (res.msg || '已重新发起转账') + '。如果微信要求用户确认收款，需要骑手在小程序钱包页点「去确认」。',
-						showCancel: false
-					})
-					await this.load()
-				} catch (e) {
-					uni.hideLoading()
-					uni.showModal({ title: '重发失败', content: e.message || '请稍后再试', showCancel: false })
 				}
 			},
 			search() {
