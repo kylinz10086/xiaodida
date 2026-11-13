@@ -31,7 +31,7 @@
 				</view>
 				<view class="stat-card">
 					<text class="stat-num">¥{{ summary.amount || 0 }}</text>
-					<text class="stat-label">提现总额</text>
+					<text class="stat-label">已到账金额</text>
 				</view>
 				<view class="stat-card">
 					<text class="stat-num ok">{{ summary.success || 0 }}</text>

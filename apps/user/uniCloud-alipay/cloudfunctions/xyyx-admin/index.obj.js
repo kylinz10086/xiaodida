@@ -298,7 +298,13 @@ const api = {
       pageSize,
       summary: {
         count: filtered.length,
-        amount: C.yuan(filtered.reduce((s, r) => s + r.amount_cent, 0)),
+        // 总额只统计「真正打出去的钱」（已到账），不要把失败/在途也算进去
+        amount: C.yuan(
+          filtered
+            .filter((r) => r.state === 'SUCCESS')
+            .reduce((s, r) => s + r.amount_cent, 0)
+        ),
+        amount_all: C.yuan(filtered.reduce((s, r) => s + r.amount_cent, 0)),
         success: filtered.filter((r) => r.state === 'SUCCESS').length,
         inflight: filtered.filter((r) => ['pending', 'ACCEPTED', 'TRANSFERING', 'PROCESSING', 'WAIT_USER_CONFIRM'].indexOf(r.state) >= 0).length,
         failed: filtered.filter((r) => ['FAIL', 'CANCELLED', 'EXPIRED'].indexOf(r.state) >= 0).length,

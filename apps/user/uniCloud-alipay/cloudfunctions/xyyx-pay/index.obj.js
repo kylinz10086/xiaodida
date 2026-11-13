@@ -756,6 +756,7 @@ async function healToPaid(doc, operator) {
   const no = doc._id
   const amountCent = Number(doc.amount_cent) || 0
   let recharged = false
+  let debt = false
 
   if (doc.rolled_back) {
     try {
@@ -771,6 +772,26 @@ async function healToPaid(doc, operator) {
     } catch (e) {
       recharged = false
     }
+
+    // 余额不够也得扣：允许扣成负数（记为欠款）。
+    // 否则「钱已经到微信了、可提现余额却没扣」，账永远平不了；后续收入会自动抵回来。
+    if (!recharged) {
+      try {
+        await C.db
+          .collection(C.COLL.wallets)
+          .doc(doc.user_id)
+          .update({
+            balance_cent: C.dbCmd.inc(-amountCent),
+            withdrawn_cent: C.dbCmd.inc(amountCent),
+            update_time: Date.now()
+          })
+        recharged = true
+        debt = true
+      } catch (e) {
+        recharged = false
+      }
+    }
+
     if (recharged) {
       try {
         await C.db.collection(C.COLL.transactions).add(
@@ -779,7 +800,7 @@ async function healToPaid(doc, operator) {
             uid: doc.user_id,
             taskId: '',
             amountCent: -amountCent,
-            remark: '提现对账补扣（钱已到账，撤回误退）',
+            remark: debt ? '提现对账补扣（余额不足，已记为欠款）' : '提现对账补扣（钱已到账，撤回误退）',
             key: `withdraw-reconcile:${no}`
           })
         )
@@ -791,6 +812,7 @@ async function healToPaid(doc, operator) {
     state: 'SUCCESS',
     rolled_back: recharged ? false : Boolean(doc.rolled_back),
     fail_reason: recharged ? '' : doc.rolled_back ? '已到账，但余额不足以撤回误退，需人工核账' : doc.fail_reason || '',
+    debt: debt || Boolean(doc.debt),
     manual_paid: Boolean(operator),
     manual_by: operator || '',
     reconciled: true,
@@ -1125,7 +1147,25 @@ const api = {
       console.warn('[xyyx-pay] 自动对账失败', e && e.message)
     }
 
-    return C.ok({ scanned: scanned.n, updated: scanned.updated, healed })
+    // ---- 第三遍：补扣「已到账但钱没扣回来」的单子 ----
+    // 之前余额不够时只标记了「需人工核账」，那些单子钱在微信、余额没扣。
+    // 现在允许扣成负数（欠款），所以这里把它们补扣平。
+    let settled = 0
+    try {
+      const pendRes = await C.db
+        .collection(C.COLL.withdrawals)
+        .where({ rolled_back: true, state: 'SUCCESS', create_time: C.dbCmd.gt(Date.now() - 30 * 86400000) })
+        .limit(10)
+        .get()
+      for (const doc of pendRes.data || []) {
+        const okDeduct = await healToPaid(doc, '')
+        if (okDeduct) settled++
+      }
+    } catch (e) {
+      console.warn('[xyyx-pay] 补扣未平账提现失败', e && e.message)
+    }
+
+    return C.ok({ scanned: scanned.n, updated: scanned.updated, healed, settled })
   },
 
   /**
