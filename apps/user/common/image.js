@@ -128,15 +128,38 @@ async function pickAvatar(filePath, sizes, maxLen) {
  * 小程序 <image> 走 downloadFile 域名白名单，云存储 CDN 域名没配就整片裂图；
  * 临时链接还会过期。callFunction 用的是 request 域名（登录都靠它，一定配过），
  * 所以兜底走云函数取图，客户端拿到 base64 再显示 / 预览。
+ *
+ * 云函数返回值有大小上限，所以服务端按 192KB 分片返回，这里循环拼接 ——
+ * 大图也能看，不受单次返回大小限制。
  */
-export async function fetchImageData(role, fileID) {
+export async function fetchImageData(role, fileID, onProgress) {
 	const id = String(fileID || '').trim()
 	if (id.indexOf('cloud://') !== 0) return ''
-	const res = await apiOf(role).getImageData(id)
-	if (!res || res.code !== 0) throw new Error((res && res.msg) || '图片读取失败')
-	const d = res.data || {}
-	if (!d.base64) throw new Error('图片读取失败')
-	return 'data:' + (d.mime || 'image/jpeg') + ';base64,' + d.base64
+	const api = apiOf(role)
+	const parts = []
+	let offset = 0
+	let mime = 'image/jpeg'
+	let size = 0
+	for (let i = 0; i < 80; i++) {
+		const res = await api.getImageData(id, offset)
+		if (!res || res.code !== 0) throw new Error((res && res.msg) || '图片读取失败')
+		const d = res.data || {}
+		if (!d.base64) throw new Error('图片读取失败')
+		parts.push(d.base64)
+		mime = d.mime || mime
+		size = d.size || size
+		offset += d.chunk || 0
+		if (typeof onProgress === 'function') onProgress(offset, size)
+		if (d.done) break
+	}
+	return 'data:' + mime + ';base64,' + parts.join('')
+}
+
+/** 取原图并落成本地临时文件（给 previewImage / <image> 用） */
+export async function fetchImageToTempFile(role, fileID) {
+	const uri = await fetchImageData(role, fileID)
+	if (!uri) return ''
+	return dataUriToTempFile(uri)
 }
 
 /**

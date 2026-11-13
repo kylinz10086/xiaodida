@@ -36,8 +36,6 @@
 			<view class="btn btn-primary" :class="{ disabled: submitting }" @click="withdraw">
 				{{ submitting ? '提交中…' : '申请提现' }}
 			</view>
-
-			<text class="tip">自动到账，不再人工审核；单笔最高 {{ maxWithdraw }} 元、每天最多 5 次、单日累计 {{ maxDaily }} 元。两次提现间隔 10 分钟。</text>
 		</view>
 
 		<!-- 明细 -->

@@ -77,17 +77,18 @@
 	 */
 	const QUICK = ['我快到了', '放门口就行', '在楼下等你', '稍等一下']
 
-	import { uploadImage, getTempUrls, thumbDataUri, dataUriToTempFile, fetchImageData } from '@/common/image.js'
+	import { uploadImage, getTempUrls, thumbDataUri, dataUriToTempFile, fetchImageToTempFile } from '@/common/image.js'
 
 	function pad(n) {
 		return n < 10 ? '0' + n : '' + n
 	}
 
-	/** 只有这几种 src 能直接画出来：内嵌 data URI、http(s) 链接、本地静态资源 */
+	/** 只有这几种 src 能直接画出来：内嵌 data URI、本地临时文件、http(s) 链接、本地静态资源 */
 	function displayable(src) {
 		const s = String(src || '')
 		if (!s) return false
 		if (s.indexOf('data:image/') === 0) return true
+		if (s.indexOf('wxfile://') === 0) return true
 		if (s.indexOf('http://') === 0 || s.indexOf('https://') === 0) return true
 		if (s.charAt(0) === '/') return true
 		return false
@@ -241,23 +242,28 @@
 				const url = this.imgMap[m.content]
 				return displayable(url) ? url : ''
 			},
-			/** 把聊天里没有缩略图的老图片补上：先试临时链接，失败再让云函数取原图 */
+			/** 把聊天里没有缩略图的老图片补上：先试临时链接，失败再让云函数分片取原图 */
 			async resolveImages() {
 				const ids = Array.from(new Set(this.messages
 					.filter((m) => m.type === 'image' && typeof m.content === 'string' && m.content.indexOf('cloud://') === 0)
 					.map((m) => m.content)
-					.filter((id) => !this.imgMap[id])))
+					.filter((id) => !displayable(this.imgMap[id]))))
 				if (!ids.length) return
 				const map = await getTempUrls(ids)
 				if (Object.keys(map).length) {
 					this.imgMap = Object.assign({}, this.imgMap, map)
 				}
-				// 临时链接拿不到（域名没配 / 链接过期）→ 走 callFunction 取 base64
+				// 临时链接拿不到（域名没配 / 链接过期）→ 云函数取原图，落成本地临时文件再画
 				const missing = ids.filter((id) => !displayable(this.imgMap[id]))
-				for (const id of missing.slice(0, 4)) {
+				for (const id of missing.slice(0, 2)) {
 					try {
-						const uri = await fetchImageData(this.role, id)
-						if (uri) this.imgMap = Object.assign({}, this.imgMap, { [id]: uri })
+						const local = await fetchImageToTempFile(this.role, id)
+						if (local) {
+							this.imgMap = Object.assign({}, this.imgMap, { [id]: local })
+							this.messages.forEach((m) => {
+								if (m.type === 'image' && m.content === id) m._imgFailed = false
+							})
+						}
 					} catch (e) {
 						// 标记失败，气泡上给「点开重试」；单张失败不影响其它消息
 						this.messages.forEach((m) => {
@@ -346,26 +352,27 @@
 				this.messages = this.messages.filter((x) => x._id !== m._id)
 				this.pushAndSend(m.content, m.type || 'text', m.thumb || '')
 			},
-			/** 点开大图：优先原图（临时链接或云函数取回的 base64），取不到再用缩略图 */
+			/** 点开大图：原图（云函数分片取回、落本地文件）优先，取不到再用缩略图 */
 			async previewImage(m) {
 				if (!m || m.type !== 'image') return
+				const isCloud = typeof m.content === 'string' && m.content.indexOf('cloud://') === 0
 				let url = this.imgMap[m.content] || ''
 				let lastErr = ''
-				const isCloud = typeof m.content === 'string' && m.content.indexOf('cloud://') === 0
 
-				// 1. 手头没有可用链接 → 先试临时链接
+				// 1. 手头没有可用地址 → 先试临时链接
 				if (!displayable(url) && isCloud) {
 					const map = await getTempUrls([m.content])
 					url = map[m.content] || ''
 					if (url) this.imgMap = Object.assign({}, this.imgMap, { [m.content]: url })
 				}
-				// 2. 还是不行 → 云函数取原图 base64（不依赖 downloadFile 域名）
+				// 2. 还是不行 → 云函数分片取原图，直接落成本地临时文件（多大都能看）
 				if (!displayable(url) && isCloud) {
 					uni.showLoading({ title: '加载原图…', mask: true })
 					try {
-						url = await fetchImageData(this.role, m.content)
-						if (url) {
-							this.imgMap = Object.assign({}, this.imgMap, { [m.content]: url })
+						const local = await fetchImageToTempFile(this.role, m.content)
+						if (local) {
+							url = local
+							this.imgMap = Object.assign({}, this.imgMap, { [m.content]: local })
 							m._imgFailed = false
 						}
 					} catch (e) {

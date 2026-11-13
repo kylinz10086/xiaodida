@@ -151,6 +151,10 @@ async function main() {
   eq(img.code, 0, '取图 ok: ' + img.msg)
   eq(img.data.mime, 'image/jpeg', 'mime 正确')
   eq(Buffer.from(img.data.base64, 'base64').toString(), 'fake-image-bytes', 'base64 是真实图片内容')
+  eq(img.data.done, true, '小图一次返回完（done=true）')
+  eq(img.data.size, 16, '返回原始字节数')
+  const over = await call(userObj.getImageData, 'cloud://env-test/chat1.jpg', 999)
+  eq(over.code, 400, '偏移量超出图片大小被拒')
   const badImg = await call(userObj.getImageData, 'not-a-file')
   eq(badImg.code, 400, '非法地址被拒')
 

@@ -275,7 +275,7 @@
 <script>
 	import { mapGetters, mapActions } from 'vuex';
 	import { navigateTo, fmtMoney } from '@/common/rider-util.js';
-	import { getTempUrls, dataUriToTempFile, fetchImageData } from '@/common/image.js';
+	import { getTempUrls, dataUriToTempFile, fetchImageToTempFile } from '@/common/image.js';
 
 	export default {
 		data() {
@@ -377,24 +377,24 @@
 				const missing = ids.filter((id) => !this.imageMap[id] && !this.thumbOf(id));
 				for (const id of missing.slice(0, 3)) {
 					try {
-						const uri = await fetchImageData('user', id);
-						if (uri) this.imageMap = Object.assign({}, this.imageMap, { [id]: uri });
+						const local = await fetchImageToTempFile('user', id);
+						if (local) this.imageMap = Object.assign({}, this.imageMap, { [id]: local });
 					} catch (e) {
 						// 单张失败不影响其它图
 					}
 				}
 			},
-			/** 点开看大图：优先原图（云函数取回），没有再退回缩略图 */
+			/** 点开看大图：优先原图（云函数分片取回、落本地文件），没有再退回缩略图 */
 			async fullUrl(id) {
 				const cached = this.imageMap[id];
 				if (cached) return cached;
 				if (typeof id === 'string' && id.indexOf('cloud://') === 0) {
 					uni.showLoading({ title: '加载原图…', mask: true });
 					try {
-						const uri = await fetchImageData('user', id);
-						if (uri) {
-							this.imageMap = Object.assign({}, this.imageMap, { [id]: uri });
-							return uri;
+						const local = await fetchImageToTempFile('user', id);
+						if (local) {
+							this.imageMap = Object.assign({}, this.imageMap, { [id]: local });
+							return local;
 						}
 					} catch (e) {
 						// 继续用缩略图
