@@ -148,18 +148,62 @@ export async function fetchImageData(role, fileID, onProgress) {
 		parts.push(d.base64)
 		mime = d.mime || mime
 		size = d.size || size
-		offset += d.chunk || 0
 		if (typeof onProgress === 'function') onProgress(offset, size)
+		// 兼容旧版云函数：只返回整张图，没有分片字段
+		if (d.chunk === undefined || d.done === undefined) break
+		offset += d.chunk
 		if (d.done) break
+		if (!d.chunk) throw new Error('图片分片异常')
 	}
 	return 'data:' + mime + ';base64,' + parts.join('')
 }
 
-/** 取原图并落成本地临时文件（给 previewImage / <image> 用） */
-export async function fetchImageToTempFile(role, fileID) {
-	const uri = await fetchImageData(role, fileID)
-	if (!uri) return ''
-	return dataUriToTempFile(uri)
+/**
+ * 分片取原图，边取边 append 到本地临时文件。
+ *
+ * 不先拼成一个巨大的 base64 字符串：大图（接近 1MB）拼完再 writeFile，
+ * 小程序容易卡住/写失败。这里每片直接 appendFileSync(..., 'base64')，
+ * 每片长度服务端保证是 3 的倍数，逐片解码不会有填充问题。
+ */
+export function fetchImageToTempFile(role, fileID) {
+	return new Promise((resolve) => {
+		const id = String(fileID || '').trim()
+		if (id.indexOf('cloud://') !== 0) return resolve('')
+		const fs = typeof wx !== 'undefined' && wx.getFileSystemManager ? wx.getFileSystemManager() : null
+		const base = (typeof wx !== 'undefined' && wx.env && wx.env.USER_DATA_PATH) || ''
+		if (!fs || !base) return resolve('')
+
+		const api = apiOf(role)
+		const filePath = `${base}/img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`
+		let offset = 0
+		let started = false
+
+		const run = async () => {
+			try {
+				for (let i = 0; i < 80; i++) {
+					const res = await api.getImageData(id, offset)
+					if (!res || res.code !== 0) throw new Error((res && res.msg) || '图片读取失败')
+					const d = res.data || {}
+					if (!d.base64) throw new Error('图片数据为空')
+					if (!started) {
+						fs.writeFileSync(filePath, d.base64, 'base64')
+						started = true
+					} else {
+						fs.appendFileSync(filePath, d.base64, 'base64')
+					}
+					// 兼容旧版云函数（整张图一次返回）
+					if (d.chunk === undefined || d.done === undefined) break
+					offset += d.chunk
+					if (d.done) break
+					if (!d.chunk) throw new Error('图片分片异常')
+				}
+				resolve(started ? filePath : '')
+			} catch (e) {
+				resolve('')
+			}
+		}
+		run()
+	})
 }
 
 /**

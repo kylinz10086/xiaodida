@@ -60,8 +60,10 @@
 			</scroll-view>
 			<view class="input-row">
 				<view class="img-btn" @click="pickImage">＋</view>
-				<textarea class="input" v-model="draft" auto-height :maxlength="300" :show-confirm-bar="false"
-					confirm-type="send" :cursor-spacing="24" placeholder="说点什么…" @confirm="send"></textarea>
+				<view class="input-box">
+					<textarea class="input" v-model="draft" auto-height :maxlength="300" :show-confirm-bar="false"
+						confirm-type="send" :cursor-spacing="24" placeholder="说点什么…" @confirm="send"></textarea>
+				</view>
 				<view class="send-btn" :class="{ disabled: !canSend }" @click="send">发送</view>
 			</view>
 		</view>
@@ -656,17 +658,29 @@
 	}
 
 	/**
-	 * 必须显式给 height：微信的 textarea 是原生组件，只写 min-height 时
-	 * 原生层仍按默认高度（约 150px）渲染，会盖住上方的快捷短语，看起来像「框比按钮高一截」。
+	 * 输入框外层用普通 view 控制高度。
+	 * 微信 textarea 是原生组件：直接给它 height/flex 时高度经常不生效，还会盖住上方的快捷短语；
+	 * 套一层 view 后，外层 84rpx 和「＋」「发送」对齐，里面 textarea 自己按内容长高。
 	 */
-	.input {
+	.input-box {
 		flex: 1;
-		height: 84rpx;
 		min-height: 84rpx;
-		max-height: 260rpx;
 		background: #f2f3f5;
 		border-radius: 16rpx;
 		padding: 20rpx 22rpx;
+		box-sizing: border-box;
+		display: flex;
+		align-items: center;
+	}
+
+	.input {
+		flex: 1;
+		width: 100%;
+		height: 44rpx;
+		min-height: 44rpx;
+		max-height: 220rpx;
+		background: transparent;
+		padding: 0;
 		font-size: 28rpx;
 		line-height: 44rpx;
 		box-sizing: border-box;

@@ -9,7 +9,7 @@
 		<view class="pv-close" @click.stop="close">×</view>
 		<view class="pv-bar" @click.stop>
 			<text class="pv-index">{{ current + 1 }} / {{ list.length }}</text>
-			<text class="pv-tip">左右滑动 · 点图片关闭</text>
+			<text class="pv-tip" @click.stop="retry">{{ tipText }}</text>
 		</view>
 	</view>
 </template>
@@ -24,7 +24,7 @@
 	 *   - 左右滑动看同组所有图片；
 	 *   - 原图取不到就一直显示缩略图，不会白屏。
 	 */
-	import { fetchImageToTempFile } from '@/common/image.js'
+	import { fetchImageToTempFile, getTempUrls } from '@/common/image.js'
 
 	export default {
 		data() {
@@ -34,7 +34,14 @@
 				role: 'user',
 				full: {},
 				loading: {},
-				failed: {}
+				failed: {},
+				err: ''
+			}
+		},
+		computed: {
+			tipText() {
+				if (this.err) return this.err + '，点此重试'
+				return '左右滑动 · 点图片关闭'
 			}
 		},
 		onLoad() {
@@ -53,11 +60,15 @@
 			},
 			onChange(e) {
 				this.current = (e && e.detail && e.detail.current) || 0
+				this.err = ''
 				this.loadFull(this.current)
 			},
 			onImgError(it) {
-				// 原图加载失败就退回缩略图，别留一块白
-				if (it && it.fileID) this.$set(this.failed, it.fileID, true)
+				// 原图加载失败就退回缩略图，并把原因显示出来（方便现场判断）
+				if (it && it.fileID) {
+					this.$set(this.failed, it.fileID, true)
+					this.err = '原图显示失败'
+				}
 			},
 			async loadFull(i) {
 				const it = this.list[i]
@@ -65,12 +76,32 @@
 				this.$set(this.loading, it.fileID, true)
 				try {
 					const local = await fetchImageToTempFile(this.role, it.fileID)
-					if (local) this.$set(this.full, it.fileID, local)
+					if (local) {
+						this.$set(this.full, it.fileID, local)
+						this.err = ''
+					} else {
+						// 云函数取不到时，退回云存储临时链接（如果小程序域名白名单配过，这条也能用）
+						const map = await getTempUrls([it.fileID])
+						if (map[it.fileID]) {
+							this.$set(this.full, it.fileID, map[it.fileID])
+							this.err = ''
+						} else {
+							this.err = '原图加载失败'
+						}
+					}
 				} catch (e) {
-					// 取不到原图就继续显示缩略图
+					this.err = (e && e.message) || '原图加载失败'
 				} finally {
 					this.$set(this.loading, it.fileID, false)
 				}
+			},
+			retry() {
+				const it = this.list[this.current]
+				if (!it || !it.fileID) return
+				this.$delete(this.full, it.fileID)
+				this.$set(this.failed, it.fileID, false)
+				this.err = ''
+				this.loadFull(this.current)
 			},
 			close() {
 				uni.navigateBack({
