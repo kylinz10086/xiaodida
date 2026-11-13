@@ -136,7 +136,7 @@
 		</view>
 
 		<view class="version-footer">
-			<text class="version-text">{{ versionText }}</text>
+			<text class="version-text" @click="showVersion"> {{ versionText }} </text>
 		</view>
 		
 		<view class="edit-modal" v-if="showEditModal" @touchmove.stop.prevent>
@@ -192,7 +192,7 @@ import { mapActions, mapGetters } from 'vuex'
 import WechatLoginModal from '@/components/wechat-login-modal/wechat-login-modal.vue'
 import { fmtMoney } from '@/common/rider-util.js'
 import { avatarDataUri } from '@/common/image.js'
-import { versionText as appVersionText } from '@/common/version.js'
+import { versionText as appVersionText, versionDetail } from '@/common/version.js'
 
 export default {
 	components: {
@@ -297,6 +297,21 @@ export default {
 		goSupport() {
 			// 目前没有人工客服，入口已从「我的」移除；这里保留兜底，避免旧入口/深链报错
 			uni.navigateTo({ url: '/pages/xyyx/feedback/feedback' })
+		},
+		/** 点版本号看详情：跑的是哪一版、哪条通道、什么时候构建的 */
+		showVersion() {
+			const d = versionDetail()
+			uni.showModal({
+				title: '当前版本',
+				content:
+					`版本号：v${d.version}\n` +
+					`通道：${d.env}\n` +
+					`构建时间：${d.stamp}\n` +
+					`AppID：${d.appid || '-'}\n\n` +
+					'如果版本号不是最新的：微信首页下拉 → 最近使用的小程序 → 长按删除，再重新扫预览码。',
+				showCancel: false,
+				confirmText: '知道了'
+			})
 		},
 		async loadChatUnread() {
 			try {

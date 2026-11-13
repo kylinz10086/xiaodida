@@ -305,6 +305,14 @@ const api = {
     })
   },
 
+  /** 后台查云函数出口 IP（配商家转账「接口安全IP」白名单用） */
+  async egressIp() {
+    await C.requireAdmin(this)
+    const pay = uniCloud.importObject('xyyx-pay', { customUI: true })
+    const r = await pay.checkEgressIp()
+    return C.ok(r.data || {}, r.msg || 'ok')
+  },
+
   /** 后台触发一次在途提现状态同步（等同定时任务里那一步，方便手动核对） */
   async syncWithdrawals() {
     await C.requireAdmin(this)

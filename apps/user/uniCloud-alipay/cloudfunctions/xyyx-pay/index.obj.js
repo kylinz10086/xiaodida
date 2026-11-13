@@ -318,6 +318,32 @@ async function egressIp() {
   }
 }
 
+/**
+ * 一次问多个回显服务，把云函数出口 IP 都收集起来。
+ * 微信「商家转账 → 接口安全IP」要逐个填，所以多问几次 + 多个来源，
+ * 尽量把 NAT 池里的地址都找出来（同一台机器多次调用也可能落在不同 IP 上）。
+ */
+async function egressIpList() {
+  const urls = [
+    'https://api.ipify.org?format=json',
+    'https://ipv4.icanhazip.com',
+    'https://api.ip.sb/ip',
+    'https://myip.ipip.net'
+  ]
+  const found = []
+  await Promise.all(
+    urls.map(async (u) => {
+      try {
+        const r = await uniCloud.httpclient.request(u, { dataType: 'text', timeout: 6000 })
+        const text = String((r && r.data) || '')
+        const m = text.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/)
+        if (m) found.push(m[1])
+      } catch (e) {}
+    })
+  )
+  return Array.from(new Set(found))
+}
+
 /** 用户小程序 openid：uni-id 存在 wx_openid 对象里，key 形如 mp-weixin_wx... */
 async function openidOf(uid) {
   try {
@@ -550,6 +576,30 @@ function wdPub(d) {
 }
 
 const api = {
+
+  /**
+   * 查云函数出口 IP（配「商家转账 → 接口安全IP」白名单用）。
+   * 连查 3 轮，把不同实例/不同 NAT 出口的地址都收进来。
+   */
+  async checkEgressIp() {
+    const info = typeof this.getClientInfo === 'function' ? this.getClientInfo() : {}
+    if (!info || info.source === 'client') await C.requireAdmin(this)
+
+    const ips = []
+    for (let i = 0; i < 3; i++) {
+      const list = await egressIpList()
+      list.forEach((ip) => {
+        if (ips.indexOf(ip) < 0) ips.push(ip)
+      })
+    }
+    return C.ok(
+      {
+        ips,
+        tip: '把下面这些 IP 全部加到 微信商户平台 → 产品中心 → 商家转账 → 接口安全IP，保存后 1~5 分钟生效'
+      },
+      ips.length ? '查到 ' + ips.length + ' 个出口 IP' : '没查到（云函数访问公网受限）'
+    )
+  },
 
   /** 支付模式探测，客户端用它决定显示「微信支付」还是「模拟支付」 */
   async getPayMode() {

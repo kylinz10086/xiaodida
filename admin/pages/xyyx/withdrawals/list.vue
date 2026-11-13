@@ -7,6 +7,7 @@
 				<button class="uni-button" type="default" size="mini" @click="search">搜索</button>
 				<button class="uni-button" type="primary" size="mini" @click="load">刷新</button>
 				<button class="uni-button" type="default" size="mini" @click="sync">同步在途状态</button>
+				<button class="uni-button" type="default" size="mini" @click="showIps">查出口IP</button>
 			</view>
 		</view>
 
@@ -17,6 +18,8 @@
 					骑手点提现 → 系统扣余额并发起转账 → 微信返回「待确认收款」时，骑手要在微信里点确认，钱才进零钱。
 					转账失败/取消/过期会自动把金额退回骑手余额（标记「已退回」），不会出现扣了钱没到账。
 					失败的单子确认余额已退回后，可以在这里点「重发」再来一次。
+					如果失败原因写「此IP地址不允许调用接口」，点右上角「查出口IP」，把查到的 IP 全部加到
+					微信商户平台 → 产品中心 → 商家转账 → 接口安全IP。
 				</text>
 			</view>
 
@@ -130,6 +133,31 @@
 					uni.showModal({ title: '加载失败', content: e.message || '请确认已登录管理员账号', showCancel: false })
 				} finally {
 					this.loading = false
+				}
+			},
+			/** 查云函数出口 IP：提现报「此IP地址不允许调用接口」时，把这些 IP 加到商户平台白名单 */
+			async showIps() {
+				uni.showLoading({ title: '查询中…', mask: true })
+				try {
+					const res = await api().egressIp()
+					uni.hideLoading()
+					if (res.code !== 0) throw new Error(res.msg)
+					const d = res.data || {}
+					const ips = (d.ips || []).join('\n') || '没查到（云函数访问公网受限）'
+					uni.setClipboardData({
+						data: (d.ips || []).join(','),
+						success: () => {},
+						fail: () => {}
+					})
+					uni.showModal({
+						title: '云函数出口 IP（已复制）',
+						content: `${ips}\n\n${d.tip || ''}`,
+						showCancel: false,
+						confirmText: '知道了'
+					})
+				} catch (e) {
+					uni.hideLoading()
+					uni.showModal({ title: '查询失败', content: e.message || '请稍后再试', showCancel: false })
 				}
 			},
 			/** 让服务端去微信查一遍在途转账（确认收款/失败自动退回） */
