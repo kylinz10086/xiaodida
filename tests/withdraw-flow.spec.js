@@ -176,6 +176,18 @@ async function main() {
   await call(payObj.syncWithdrawals)
   eq(get('xyyx-wallets', 'rider-1').balance_cent, 5000, '同步后余额没有被重复加钱')
 
+  console.log('\n[9] 后台重发：必须沿用原单号（微信：请勿更换商户单号）')
+  const failedDoc = Array.from(coll('xyyx-withdrawals').values()).find((d) => d.state === 'FAIL')
+  ok(!!failedDoc, '有可重发的失败单')
+  const w5 = get('xyyx-wallets', 'rider-1')
+  w5.balance_cent = 10000
+  process.env.XYYX_WITHDRAW_MOCK = 'success'
+  const re = await call(payObj.reissueWithdraw, { outBillNo: failedDoc._id })
+  eq(re.code, 0, '重发成功: ' + re.msg)
+  eq(re.data && re.data.out_bill_no, failedDoc._id, '沿用原单号，不生成新单号')
+  eq(get('xyyx-withdrawals', failedDoc._id).state, 'SUCCESS', '原提现单变成 SUCCESS')
+  eq(get('xyyx-wallets', 'rider-1').balance_cent, 10000 - 400, '重发重新扣了一次 4 元')
+
   console.log('\n-----------------------------')
   console.log('passed ' + passed + ', failed ' + failures.length)
   if (failures.length) {

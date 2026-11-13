@@ -74,6 +74,7 @@
 					</uni-td>
 					<uni-td align="center">
 						<text class="reason">{{ item.fail_reason || '-' }}</text>
+						<text class="hint" v-if="needTopup(item.fail_reason)">运营账户没钱 → 充值后点重发（原单号）</text>
 						<text class="ip" v-if="item.egress_ip">IP {{ item.egress_ip }}</text>
 					</uni-td>
 					<uni-td align="center">
@@ -113,6 +114,11 @@
 			this.load()
 		},
 		methods: {
+			/** 资金不足：微信提示「商户运营账户资金不足」，充值后原单号重试即可 */
+			needTopup(reason) {
+				const s = String(reason || '')
+				return s.indexOf('资金不足') >= 0 || s.indexOf('余额不足') >= 0 || s.indexOf('运营账户') >= 0
+			},
 			stateClass(s) {
 				if (s === 'SUCCESS') return 'ok'
 				if (s === 'WAIT_USER_CONFIRM') return 'wait'
@@ -289,6 +295,15 @@
 		color: #999;
 	}
 	.muted { color: #bbb; }
+	.hint {
+		display: block;
+		margin-top: 2px;
+		font-size: 11px;
+		color: #9a6200;
+		background: #fff4e0;
+		border-radius: 4px;
+		padding: 1px 4px;
+	}
 
 	.badge {
 		display: inline-block;

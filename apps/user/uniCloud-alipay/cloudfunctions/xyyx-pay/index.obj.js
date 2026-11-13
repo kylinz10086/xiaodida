@@ -859,7 +859,9 @@ const api = {
     const wallet = await C.ensureWallet(uid)
     C.assert(Number(wallet.balance_cent) >= amountCent, 400, '用户当前余额不足，无法重发')
 
-    const outBillNo = 'WD' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+    // 微信明确要求：资金不足这类失败要「原单号重试，请勿更换商户单号」，
+    // 所以这里复用原来的 out_bill_no，不再生成新单号。
+    const outBillNo = no
     const upd = await C.db
       .collection(C.COLL.wallets)
       .where({ _id: uid, balance_cent: C.dbCmd.gte(amountCent) })
@@ -876,20 +878,21 @@ const api = {
         uid,
         taskId: '',
         amountCent: -amountCent,
-        remark: '提现重发（商家转账）',
-        key: `withdraw:${uid}:${outBillNo}`
+        remark: '提现重发（商家转账·原单号）',
+        key: `withdraw:${uid}:${outBillNo}:r${Date.now().toString(36)}`
       })
     )
 
-    const r = await issueTransfer({ uid, amountCent, outBillNo, openid, source: 'admin' })
+    const r = await issueTransfer({ uid, amountCent, outBillNo, openid, source: 'admin', reuse: true })
     return C.ok(
       {
         out_bill_no: outBillNo,
         state: r.state,
         state_text: wdStateText(r.state),
-        need_confirm: r.state === 'WAIT_USER_CONFIRM'
+        need_confirm: r.state === 'WAIT_USER_CONFIRM',
+        reused: true
       },
-      r.state === 'WAIT_USER_CONFIRM' ? '已重发，需要用户在小程序里确认收款' : '已重新发起转账'
+      r.state === 'WAIT_USER_CONFIRM' ? '已用原单号重发，需要用户在小程序里确认收款' : '已用原单号重新发起转账'
     )
   },
 
