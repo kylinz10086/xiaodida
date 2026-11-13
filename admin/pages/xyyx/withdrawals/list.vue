@@ -82,6 +82,8 @@
 							@click="retry(item)">重发</button>
 						<button v-if="!item.legacy" class="uni-button recon" type="default" size="mini"
 							@click="reconcile(item)">对账</button>
+						<button v-if="!item.legacy && item.state !== 'SUCCESS'" class="uni-button recon" type="success"
+							size="mini" @click="markPaid(item)">标记已到账</button>
 						<text v-if="item.legacy" class="muted">-</text>
 					</uni-td>
 				</uni-tr>
@@ -184,6 +186,35 @@
 				} catch (e) {
 					uni.hideLoading()
 					uni.showModal({ title: '同步失败', content: e.message || '请稍后再试', showCancel: false })
+				}
+			},
+			/** 人工标记已到账：微信查询被 IP 白名单挡住时的兜底 */
+			async markPaid(item) {
+				const ok = await new Promise((resolve) => {
+					uni.showModal({
+						title: '标记为已到账',
+						content:
+							`确认「${item.nickname}」这笔 ¥${item.amount} 确实已到账？\n` +
+							'系统会把状态改成已到账；如果之前误退过余额，会把这笔钱扣回来。',
+						success: (r) => resolve(Boolean(r.confirm))
+					})
+				})
+				if (!ok) return
+				uni.showLoading({ title: '处理中…', mask: true })
+				try {
+					const res = await api().markWithdrawPaid({ outBillNo: item.out_bill_no || item._id })
+					uni.hideLoading()
+					if (res.code !== 0) throw new Error(res.msg)
+					const d = res.data || {}
+					uni.showModal({
+						title: '已标记',
+						content: (res.msg || '已标记为已到账') + (d.recharged ? '\n已撤回误退的余额' : ''),
+						showCancel: false
+					})
+					await this.load()
+				} catch (e) {
+					uni.hideLoading()
+					uni.showModal({ title: '操作失败', content: e.message || '请稍后再试', showCancel: false })
 				}
 			},
 			/** 对账：以微信侧状态为准，修「钱到了但显示失败」 */

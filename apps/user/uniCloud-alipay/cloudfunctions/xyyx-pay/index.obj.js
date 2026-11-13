@@ -484,16 +484,23 @@ async function probeBillState(no) {
     const r = await wxQueryTransfer(no)
     const d = (r && r.data) || {}
     if (Number(r && r.status) === 200 && d.state) {
-      return { known: true, exists: true, state: String(d.state), raw: d }
+      return { known: true, exists: true, state: String(d.state), raw: d, err: '' }
     }
     const code = String(d.code || '')
     const msg = String(d.message || '')
     if (/NOT_FOUND|NOT_EXIST|ORDER_NOT_EXIST|BILL_NOT_EXIST/i.test(code) || /不存在|未找到/.test(msg)) {
-      return { known: true, exists: false, state: '', raw: d }
+      return { known: true, exists: false, state: '', raw: d, err: '' }
     }
-    return { known: false, exists: false, state: '', raw: d }
+    // 查询接口本身被拒（最常见就是「接口安全IP」没配，同一个白名单也管查询接口）
+    return {
+      known: false,
+      exists: false,
+      state: '',
+      raw: d,
+      err: `HTTP ${r.status}${code ? ' ' + code : ''}${msg ? ' ' + msg : ''}`
+    }
   } catch (e) {
-    return { known: false, exists: false, state: '', raw: {} }
+    return { known: false, exists: false, state: '', raw: {}, err: (e && e.message) || '查询异常' }
   }
 }
 
@@ -914,7 +921,12 @@ const api = {
     C.assert(doc, 404, '提现单不存在')
 
     const probe = await probeBillState(no)
-    if (!probe.known) return C.ok({ state: doc.state, fixed: false }, '查不到微信侧状态，稍后再试')
+    if (!probe.known) {
+      return C.ok(
+        { state: doc.state, fixed: false, err: probe.err },
+        '微信没给出明确状态' + (probe.err ? '：' + probe.err : '') + '。如果是 IP 白名单问题，加白后再对账；也可以直接用「标记已到账」人工纠正'
+      )
+    }
 
     const ps = probe.state
     const billNo = (probe.raw && probe.raw.transfer_bill_no) || ''
@@ -999,6 +1011,74 @@ const api = {
     } catch (e) {
       return C.ok({ list: [] })
     }
+  },
+
+  /**
+   * 人工标记「这笔其实已经到账」（管理员）。
+   *
+   * 为什么需要它：微信「接口安全IP」没配好时，连**查询接口**都会被拒，
+   * 后台对账就拿不到真实状态，但钱确实到了用户微信里。
+   * 这时由管理员在商户平台核对后手工确认，系统负责把账改平：
+   *   - 之前误退过余额 → 把多退的扣回来（余额不够就标记人工核账）
+   *   - 状态改成 SUCCESS，并留下操作人与时间，方便追溯
+   */
+  async markWithdrawPaid(data = {}) {
+    const info = typeof this.getClientInfo === 'function' ? this.getClientInfo() : {}
+    if (!info || info.source === 'client') await C.requireAdmin(this)
+
+    const no = C.str(data.outBillNo, { min: 6, max: 64, name: '提现单号', required: true })
+    const doc = await wdGet(no)
+    C.assert(doc, 404, '提现单不存在')
+    if (doc.state === 'SUCCESS' && !doc.rolled_back) {
+      return C.ok({ state: 'SUCCESS', recharged: false }, '这笔已经是已到账状态')
+    }
+
+    const amountCent = Number(doc.amount_cent) || 0
+    let recharged = false
+    if (doc.rolled_back) {
+      try {
+        const upd = await C.db
+          .collection(C.COLL.wallets)
+          .where({ _id: doc.user_id, balance_cent: C.dbCmd.gte(amountCent) })
+          .update({
+            balance_cent: C.dbCmd.inc(-amountCent),
+            withdrawn_cent: C.dbCmd.inc(amountCent),
+            update_time: Date.now()
+          })
+        recharged = Boolean(upd && upd.updated)
+      } catch (e) {
+        recharged = false
+      }
+      if (recharged) {
+        try {
+          await C.db.collection(C.COLL.transactions).add(
+            C.txDoc({
+              type: C.TX_TYPE.WITHDRAW,
+              uid: doc.user_id,
+              taskId: '',
+              amountCent: -amountCent,
+              remark: '提现人工对账（钱已到账，撤回误退）',
+              key: `withdraw-manualpaid:${no}`
+            })
+          )
+        } catch (e) {}
+      }
+    }
+
+    await wdPatch(no, {
+      state: 'SUCCESS',
+      rolled_back: recharged ? false : Boolean(doc.rolled_back),
+      fail_reason: recharged ? '' : doc.rolled_back ? '已到账，但余额不足以撤回误退，需人工核账' : doc.fail_reason || '',
+      manual_paid: true,
+      manual_by: String((data && data.operator) || ''),
+      manual_time: Date.now(),
+      finish_time: Date.now()
+    })
+
+    return C.ok(
+      { state: 'SUCCESS', recharged },
+      recharged ? '已标记为已到账，并撤回之前误退的余额' : '已标记为已到账（余额不足，误退部分需人工核账）'
+    )
   },
 
   /**

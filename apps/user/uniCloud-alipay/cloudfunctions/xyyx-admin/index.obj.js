@@ -307,6 +307,15 @@ const api = {
     })
   },
 
+  /** 人工标记「这笔其实已经到账」：微信查询被 IP 白名单挡住时，管理员核对后手工纠正 */
+  async markWithdrawPaid(params = {}) {
+    const auth = await C.requireAdmin(this)
+    const no = C.str(params.outBillNo || params._id, { min: 6, max: 64, name: '提现单号', required: true })
+    const pay = uniCloud.importObject('xyyx-pay', { customUI: true })
+    const r = await pay.markWithdrawPaid({ outBillNo: no, operator: auth.uid })
+    return C.ok(r.data || {}, r.msg || '已标记为已到账')
+  },
+
   /** 后台对账一笔提现（以微信侧状态为准，纠正「已到账却显示失败」这类问题） */
   async reconcileWithdraw(params = {}) {
     const auth = await C.requireAdmin(this)
