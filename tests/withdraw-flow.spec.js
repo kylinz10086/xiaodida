@@ -188,6 +188,27 @@ async function main() {
   eq(get('xyyx-withdrawals', failedDoc._id).state, 'SUCCESS', '原提现单变成 SUCCESS')
   eq(get('xyyx-wallets', 'rider-1').balance_cent, 10000 - 400, '重发重新扣了一次 4 元')
 
+  console.log('\n[10] 每天最多 20 次')
+  const txMap = coll('xyyx-transactions')
+  txMap.clear()
+  const nowTs = Date.now() - 60000
+  for (let i = 0; i < 20; i++) {
+    addDoc('xyyx-transactions', {
+      _id: 'many-' + i,
+      type: 'withdraw',
+      user_id: 'rider-1',
+      amount_cent: -100,
+      remark: '历史提现',
+      idempotency_key: 'many-' + i,
+      create_time: nowTs
+    })
+  }
+  get('xyyx-wallets', 'rider-1').balance_cent = 100000
+  process.env.XYYX_WITHDRAW_MOCK = 'success'
+  const overCount = await call(payObj.requestWithdraw, { amount: 1, ...meta() })
+  eq(overCount.code, 400, '已经 20 次，第 21 次被拒')
+  ok(/20 次/.test(overCount.msg || ''), '提示写明每天 20 次：' + overCount.msg)
+
   console.log('\n-----------------------------')
   console.log('passed ' + passed + ', failed ' + failures.length)
   if (failures.length) {

@@ -685,7 +685,7 @@ const api = {
       .orderBy('create_time', 'desc')
       .get()
     const todayTx = todayRes.data || []
-    C.assert(todayTx.length < 5, 400, '每天最多提现 5 次，明天再来')
+    C.assert(todayTx.length < 20, 400, '每天最多提现 20 次，明天再来')
     const todayCent = todayTx.reduce((sum, t) => sum + Math.abs(Number(t.amount_cent) || 0), 0)
     C.assert(todayCent + amountCent <= 50000, 400, '单日累计提现上限 500 元')
     if (todayTx.length) {
