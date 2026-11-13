@@ -55,23 +55,40 @@ export function readBase64(filePath) {
 
 /**
  * 上传一张图片，返回 fileID。
- * 图片超过 900KB（服务端上限）会先压缩；压完还超就报错让用户换一张。
+ *
+ * 关键约束：服务端会把图片字节**直存进数据库**（≤620KB base64），
+ * 客户端看图只走数据库这条路 —— 这个云空间服务端读不了云存储（downloadFile / 临时链接都拿不到内容）。
+ * 所以「存得进去」就等于「打得开」：压到 560KB 以内再传，宁可小一点，也不要传上去打不开。
  */
+const UPLOAD_TARGET_B64 = 560000
+
 export async function uploadImage(filePath, opts = {}) {
 	const role = opts.role || 'user'
 	const dir = opts.dir || 'misc'
+	const target = Number(opts.targetB64) || UPLOAD_TARGET_B64
+	const baseW = Number(opts.width) || 1080
+	const baseQ = Number(opts.quality) || 60
+
+	// 从「清晰」到「一定存得进去」逐档压
+	const ladder = [
+		{ width: baseW, quality: baseQ },
+		{ width: Math.min(baseW, 1200), quality: 55 },
+		{ width: 1000, quality: 50 },
+		{ width: 900, quality: 45 },
+		{ width: 800, quality: 40 },
+		{ width: 720, quality: 35 }
+	]
+
 	let path = filePath
 	let b64 = ''
-
-	for (const quality of [opts.quality || 60, 45, 30]) {
-		path = await compressImage(filePath, { quality, width: opts.width || 1080 })
+	for (const step of ladder) {
+		path = await compressImage(filePath, step)
 		b64 = await readBase64(path)
 		if (!b64) throw new Error('读取图片失败')
-		// base64 长度 ≈ 二进制 × 1.37，留一点 JSON 余量
-		if (b64.length <= 1_150_000) break
+		if (b64.length <= target) break
 	}
 
-	if (b64.length > 1_150_000) throw new Error('图片太大，请换一张或先裁剪')
+	if (b64.length > 620000) throw new Error('图片太大，换一张小一点的图片试试')
 
 	const res = await apiOf(role).uploadImage({
 		base64: b64,
@@ -391,12 +408,14 @@ export function askProofImage(opts = {}) {
 					success: async (img) => {
 						const path = img.tempFilePaths[0]
 						try {
-							const thumb = await thumbDataUri(path, { width: 480 })
+							// 留痕图只出现在订单详情，缩略图可以给大一点（560px / 40KB），
+							// 太小会糊成一片，太大又会把详情返回体撑爆
+							const thumb = await thumbDataUri(path, { width: 560, maxLen: 40000 })
 							const fileID = await uploadImage(path, {
 								role: opts.role || 'rider',
 								dir: 'proof',
-								width: 1600,
-								quality: 75
+								width: 1200,
+								quality: 65
 							})
 							resolve({ fileID, thumb })
 						} catch (e) {

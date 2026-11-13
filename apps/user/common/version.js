@@ -9,10 +9,10 @@
  *
  * 这几个字段是排查「手机上还是老包」的唯一依据，别删。
  */
-export const APP_VERSION = '1.11.4'
+export const APP_VERSION = '1.11.5'
 
 /** 每次构建改一下（月-日 时:分），用来区分同版本的重新构建 */
-export const BUILD_STAMP = '11-13 21:40'
+export const BUILD_STAMP = '11-13 21:38'
 
 const ENV_TEXT = { develop: '开发版', trial: '体验版', release: '正式版' }
 

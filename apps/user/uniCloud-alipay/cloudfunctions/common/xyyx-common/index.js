@@ -1623,12 +1623,19 @@ async function downloadUrlAsBuffer(url, dataType = 'buffer') {
 /** 从云存储把整张图读回来（先 downloadFile，再临时链接 + httpclient，两条路都校验文件头） */
 async function fetchImageBuffer(id) {
   if (/^cloud:\/\//.test(id)) {
+    // 失败原因要带回去：不同云空间对 downloadFile / 临时链接的支持不一样，
+    // 只报「图片读取失败」在真机上根本没法判断是哪一步挂了。
+    const why = []
+
     // 1. 云函数端直接下载（返回 Buffer，最可靠）
     try {
       const f = await uniCloud.downloadFile({ fileID: id })
       const buf = toBuffer(f && f.fileContent)
       if (isImageBuffer(buf)) return buf
-    } catch (e) {}
+      why.push('downloadFile内容异常(' + (buf ? buf.length + 'B' : '空') + ')')
+    } catch (e) {
+      why.push('downloadFile:' + ((e && e.message) || '失败'))
+    }
 
     // 2. 服务端换临时链接再下载；不同服务空间返回的字段名可能是 tempFileURL 或 url
     let url = ''
@@ -1636,18 +1643,22 @@ async function fetchImageBuffer(id) {
       const r = await uniCloud.getTempFileURL({ fileList: [id] })
       const row = (r && r.fileList && r.fileList[0]) || {}
       url = row.tempFileURL || row.url || ''
+      if (!url) why.push('临时链接为空' + (row.status ? '(' + row.status + ')' : ''))
     } catch (e) {
-      url = ''
+      why.push('getTempFileURL:' + ((e && e.message) || '失败'))
     }
     if (url) {
       for (const type of ['buffer', 'arraybuffer']) {
         try {
           const buf = await downloadUrlAsBuffer(url, type)
           if (isImageBuffer(buf)) return buf
-        } catch (e) {}
+          why.push(type + '内容异常')
+        } catch (e) {
+          why.push(type + '下载:' + ((e && e.message) || '失败'))
+        }
       }
     }
-    throw new BizError(404, '图片读取失败，请重试')
+    throw new BizError(404, '图片读取失败（' + why.join('；').slice(0, 150) + '）')
   }
 
   // 直接是 http 链接
