@@ -275,7 +275,7 @@
 <script>
 	import { mapGetters, mapActions } from 'vuex';
 	import { navigateTo, fmtMoney } from '@/common/rider-util.js';
-	import { getTempUrls, fetchImageToTempFile } from '@/common/image.js';
+	import { resolveImageSrc } from '@/common/image.js';
 
 	export default {
 		data() {
@@ -361,7 +361,7 @@
 				if (thumb) return thumb
 				const url = this.imageMap[id]
 				if (url) return url
-				// cloud:// 没换成链接之前不要塞给 <image>，否则就是一张裂图
+				// 没换成链接之前不要塞给 <image>，否则就是一张裂图
 				return typeof id === 'string' && id.indexOf('cloud://') === 0 ? '' : id
 			},
 			async resolveImages() {
@@ -369,16 +369,14 @@
 					...(this.taskData.images || []),
 					this.taskData.pick_proof,
 					this.taskData.deliver_proof
-				].filter((id) => typeof id === 'string' && id.indexOf('cloud://') === 0);
+				].filter((id) => typeof id === 'string' && (id.indexOf('cloud://') === 0 || /^https?:\/\//.test(id)));
 				if (!ids.length) return;
-				const map = await getTempUrls(ids);
-				if (Object.keys(map).length) this.imageMap = Object.assign({}, this.imageMap, map);
-				// 临时链接拿不到（域名没配 / 链接过期）→ 云函数取原图，老订单也能显示
+				// 直读 data URI 优先（不依赖域名、不落盘），失败自动换下一条路径
 				const missing = ids.filter((id) => !this.imageMap[id] && !this.thumbOf(id));
 				for (const id of missing.slice(0, 3)) {
 					try {
-						const local = await fetchImageToTempFile('user', id);
-						if (local) this.imageMap = Object.assign({}, this.imageMap, { [id]: local });
+						const r = await resolveImageSrc('user', id);
+						if (r && r.src) this.imageMap = Object.assign({}, this.imageMap, { [id]: r.src });
 					} catch (e) {
 						// 单张失败不影响其它图
 					}
@@ -391,10 +389,12 @@
 				const list = [];
 				let current = 0;
 				for (const it of ids) {
-					const src = this.thumbOf(it) || this.imageMap[it] || (typeof it === 'string' && it.indexOf('cloud://') === 0 ? '' : it);
-					if (!src) continue;
+					const isRef = typeof it === 'string' && (it.indexOf('cloud://') === 0 || /^https?:\/\//.test(it));
+					const src = this.thumbOf(it) || this.imageMap[it] || (isRef ? '' : it);
+					// 有 fileID 的就算暂时没有缩略图也放进去：预览页自己会去取原图
+					if (!src && !isRef) continue;
 					if (it === id) current = list.length;
-					list.push({ src, fileID: typeof it === 'string' && it.indexOf('cloud://') === 0 ? it : '' });
+					list.push({ src, fileID: isRef ? it : '' });
 				}
 				if (!list.length) {
 					uni.showToast({ title: '图片暂时打不开', icon: 'none' });

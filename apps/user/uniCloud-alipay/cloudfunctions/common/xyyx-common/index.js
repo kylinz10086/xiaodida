@@ -251,7 +251,13 @@ const COLL = {
   // 运行的配置（抽佣比例、退款费率、金额区间…），一条 _id='app' 的文档
   settings: 'xyyx-settings',
   // 订单内聊天（用户 ↔ 骑手），只允许订单双方读写，全部走云对象
-  messages: 'xyyx-messages'
+  messages: 'xyyx-messages',
+  // 图片字节直存：上传时顺手把压缩后的小图 base64 存一份，
+  // 看图和云存储 / CDN 域名 / 本地文件系统全部解耦（小程序端最稳的方式）。
+  images: 'xyyx-images',
+  // 提现单：每笔提现一条，记录微信转账状态（待确认/成功/失败），
+  // 失败自动冲正余额，后台可核查、可重发。
+  withdrawals: 'xyyx-withdrawals'
 }
 
 const TX_TYPE = {
@@ -1489,7 +1495,9 @@ async function uploadImageBase64(base64, opts = {}) {
 			cloudPath: `xyyx/${dir}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
 		})
 		assert(res && res.fileID, 500, '上传失败')
-		return { fileID: res.fileID, size: buf.length }
+		// 顺手把字节直存一份：客户端看图时只走数据库，不碰云存储和域名白名单
+		const saved = await saveImageData(res.fileID, b64, { size: buf.length, uid: opts.uid })
+		return { fileID: res.fileID, size: buf.length, stored: Boolean(saved) }
 	} finally {
 		try {
 			fs.unlinkSync(tmp)
@@ -1502,65 +1510,301 @@ async function uploadImageBase64(base64, opts = {}) {
 /* ------------------------------------------------------------------ */
 
 /**
- * 把云存储里的图片读出来，以 base64 返回给客户端。
+ * 把云存储里的图片读出来，分片以 base64 返回给客户端。
  *
  * 为什么不直接让 <image> 加载临时链接：
  * 小程序加载网络图片走 downloadFile 域名白名单，云存储 CDN 域名没配置就整片裂图；
  * 临时链接还会过期。这里由云函数把图片取回来，客户端只走 callFunction 的 request 域名
  * （这个域名一定配过，否则连登录都做不了），再把 base64 落成本地临时文件显示 / 预览。
  *
- * 单张上限 600KB：base64 之后约 800KB，控制在云函数返回值大小限制内。
- * 超过这个尺寸的图只能看发送时带的缩略图。
+ * 为什么分片：云函数返回值有大小上限，单张图 base64 后很容易超。按 192KB 一片返回，
+ * 客户端拼起来就行 —— 所以「多大都能看」，不再有 600KB 这种人为限制。
  */
-const IMAGE_BYTES_MAX = 600 * 1024
+const IMAGE_MAX_BYTES = 8 * 1024 * 1024
+/** 必须是 3 的倍数：base64 分片拼接时中间不会出现 '=' 填充，最后一片才可能有 */
+const IMAGE_CHUNK = 192 * 1024
 const MIME_BY_EXT = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif' }
+
+// 同一个云函数实例里缓存最近读过的图，避免分片请求每次都重新下载整张
+const _imgCache = new Map()
+const IMG_CACHE_TTL = 5 * 60 * 1000
+const IMG_CACHE_MAX = 6
+
+function imgCacheGet(id) {
+  const hit = _imgCache.get(id)
+  if (!hit) return null
+  if (Date.now() - hit.at > IMG_CACHE_TTL) {
+    _imgCache.delete(id)
+    return null
+  }
+  return hit
+}
+
+function imgCacheSet(id, entry) {
+  if (_imgCache.size >= IMG_CACHE_MAX) {
+    const oldest = _imgCache.keys().next().value
+    _imgCache.delete(oldest)
+  }
+  _imgCache.set(id, entry)
+}
 
 function extOfPath(p) {
   const m = String(p || '').split('?')[0].match(/\.([a-zA-Z0-9]{2,5})$/)
   return m ? m[1].toLowerCase() : 'jpg'
 }
 
-async function downloadUrlAsBuffer(url) {
-  const res = await uniCloud.httpclient.request(url, {
-    method: 'GET',
-    dataType: 'buffer',
-    timeout: 20000
-  })
-  const data = res && res.data
+/** httpclient 的 data 可能是 Buffer / ArrayBuffer / base64 字符串，统一成 Buffer */
+function toBuffer(data) {
   if (!data) return null
-  return Buffer.isBuffer(data) ? data : Buffer.from(data)
+  if (Buffer.isBuffer(data)) return data
+  if (data instanceof ArrayBuffer) return Buffer.from(new Uint8Array(data))
+  if (ArrayBuffer.isView(data)) return Buffer.from(data.buffer)
+  if (typeof data === 'string') {
+    const s = data.trim()
+    // 有些运行时会返回 base64 文本；先按 base64 试，解不出再按二进制
+    if (s.length > 100 && /^[A-Za-z0-9+/=\r\n]+$/.test(s)) {
+      const b = Buffer.from(s, 'base64')
+      if (b.length > 16) return b
+    }
+    return Buffer.from(data, 'binary')
+  }
+  return null
 }
 
-async function imageDataOf(fileID) {
-  const id = String(fileID || '').trim()
-  assert(id, 400, '缺少图片地址')
-  assert(/^cloud:\/\/\S+$/.test(id) || /^https?:\/\//.test(id), 400, '图片地址不对')
+/** 用文件头判断是不是真的图片（下载错内容时能及时发现，而不是丢给 <image> 白屏） */
+function isImageBuffer(buf) {
+  if (!buf || buf.length < 12) return false
+  if (buf[0] === 0xff && buf[1] === 0xd8) return true // jpeg
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return true // png
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return true // gif
+  if (buf.slice(0, 4).toString('ascii') === 'RIFF' && buf.slice(8, 12).toString('ascii') === 'WEBP') return true
+  return false
+}
 
-  let buf = null
+async function downloadUrlAsBuffer(url, dataType = 'buffer') {
+  const res = await uniCloud.httpclient.request(url, {
+    method: 'GET',
+    dataType,
+    timeout: 20000
+  })
+  return toBuffer(res && res.data)
+}
+
+/** 从云存储把整张图读回来（先 downloadFile，再临时链接 + httpclient，两条路都校验文件头） */
+async function fetchImageBuffer(id) {
   if (/^cloud:\/\//.test(id)) {
-    // 1. 服务端换临时链接，再用 httpclient 下载（三种服务空间都支持）
+    // 1. 云函数端直接下载（返回 Buffer，最可靠）
+    try {
+      const f = await uniCloud.downloadFile({ fileID: id })
+      const buf = toBuffer(f && f.fileContent)
+      if (isImageBuffer(buf)) return buf
+    } catch (e) {}
+
+    // 2. 服务端换临时链接再下载；不同服务空间返回的字段名可能是 tempFileURL 或 url
+    let url = ''
     try {
       const r = await uniCloud.getTempFileURL({ fileList: [id] })
-      const url = r && r.fileList && r.fileList[0] && r.fileList[0].tempFileURL
-      if (url) buf = await downloadUrlAsBuffer(url)
+      const row = (r && r.fileList && r.fileList[0]) || {}
+      url = row.tempFileURL || row.url || ''
     } catch (e) {
-      buf = null
+      url = ''
     }
-    // 2. 兜底：云函数端直接下载
-    if (!buf || !buf.length) {
-      const f = await uniCloud.downloadFile({ fileID: id })
-      buf = f && f.fileContent
+    if (url) {
+      for (const type of ['buffer', 'arraybuffer']) {
+        try {
+          const buf = await downloadUrlAsBuffer(url, type)
+          if (isImageBuffer(buf)) return buf
+        } catch (e) {}
+      }
     }
-  } else {
-    buf = await downloadUrlAsBuffer(id)
+    throw new BizError(404, '图片读取失败，请重试')
   }
 
+  // 直接是 http 链接
+  for (const type of ['buffer', 'arraybuffer']) {
+    try {
+      const buf = await downloadUrlAsBuffer(id, type)
+      if (isImageBuffer(buf)) return buf
+    } catch (e) {}
+  }
+  throw new BizError(404, '图片读取失败，请重试')
+}
+
+async function loadImageBuffer(id) {
+  const hit = imgCacheGet(id)
+  if (hit) return hit
+
+  const buf = await fetchImageBuffer(id)
   assert(buf && buf.length, 404, '图片不存在或已被删除')
-  assert(buf.length <= IMAGE_BYTES_MAX, 413, '图片太大，先看缩略图')
+  assert(buf.length <= IMAGE_MAX_BYTES, 413, '图片太大，暂时打不开')
+  const entry = { buf, mime: MIME_BY_EXT[extOfPath(id)] || 'image/jpeg', at: Date.now() }
+  imgCacheSet(id, entry)
+  return entry
+}
+
+/* ------------------------------------------------------------------ */
+/* 图片字节直存数据库（解决小程序端「看图」这一整条链路）                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 为什么要把图片字节也存一份进数据库
+ *
+ * 之前客户端看图是这条链路：callFunction 分片取 base64 → 写本地文件 → <image src=本地路径>。
+ * 真机上这条链路任何一环出问题都是「黑屏 / 图片加载失败」，而且现场根本看不出是哪一环：
+ *   - 云函数从云存储 downloadFile / 换临时链接读图，不同云空间支持程度不一样；
+ *   - <image> 加载网络图要 downloadFile 域名白名单，临时链接还会过期；
+ *   - 本地写文件失败（配额、路径、base64 编码）也很常见。
+ *
+ * 现在把「看图」收敛成一条最不容易出错的路径：
+ *   上传时顺手把压缩后的图 base64 存进 xyyx-images（键 = md5(fileID)）；
+ *   看图时直接从数据库切片返回，客户端拼成 data URI 交给 <image> —— 
+ *   不碰云存储、不碰域名白名单、不碰本地文件系统。
+ * 头像一直用 data URI，在所有端都能正常显示，这条路径和头像完全一样，只是分片取。
+ *
+ * 老图（没有直存记录的）仍然走云存储读取，读成功后自动补存一份，下次直接命中。
+ */
+
+/** base64 超过这个长度就不进库了（文档太大不划算，改走云存储兜底） */
+const IMG_DB_MAX_B64 = 620000
+/** 直存路径的分片长度：必须是 4 的倍数（base64 每 4 个字符一组，切开才能直接拼接） */
+const IMG_DB_CHUNK = 160000
+/** 直存记录保留天数，cron 里清理 */
+const IMG_DB_KEEP_DAYS = 120
+
+function b64OfBuf(buf) {
+  return Buffer.isBuffer(buf) ? buf.toString('base64') : ''
+}
+
+/** base64 解码后的字节数（算 size 用，别用 length×3/4，会差几个字节） */
+function b64ByteLen(b64) {
+  const s = String(b64 || '')
+  if (!s) return 0
+  const pad = s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0
+  return Math.floor((s.length / 4) * 3) - pad
+}
+
+function imgKeyOf(fileID) {
+  return 'i_' + crypto.createHash('md5').update(String(fileID || '')).digest('hex').slice(0, 28)
+}
+
+async function imgDocOf(fileID) {
+  const id = String(fileID || '')
+  if (!id) return null
+  try {
+    const r = await db.collection(COLL.images).doc(imgKeyOf(id)).get()
+    const d = r.data && r.data[0]
+    if (d && d.b64) return d
+  } catch (e) {
+    // 集合还没建（新环境）当作没有直存记录，走云存储兜底
+  }
+  return null
+}
+
+/** 把一张图的 base64 存进数据库（失败不影响主流程） */
+async function saveImageData(fileID, base64, extra = {}) {
+  const id = String(fileID || '').trim()
+  const raw = String(base64 || '').replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, '')
+  if (!id || !raw) return ''
+  if (raw.length > IMG_DB_MAX_B64) return ''
+  const key = imgKeyOf(id)
+  const now = Date.now()
+  const doc = {
+    file_id: id.slice(0, 500),
+    b64: raw,
+    mime: extra.mime || MIME_BY_EXT[extOfPath(id)] || 'image/jpeg',
+    size: Number(extra.size) || b64ByteLen(raw),
+    user_id: extra.uid || '',
+    create_time: now,
+    update_time: now
+  }
+  try {
+    const upd = await db.collection(COLL.images).where({ _id: key }).update(doc)
+    if (!upd || !upd.updated) {
+      await db
+        .collection(COLL.images)
+        .add(Object.assign({ _id: key }, doc))
+    }
+    return key
+  } catch (e) {
+    // 集合不存在 / 文档超限 都不该把上传搞挂
+    console.warn('[xyyx-common] 图片直存失败：', e && e.message)
+    return ''
+  }
+}
+
+/** 从一段 base64 里按 4 字符对齐切一片出来 */
+function b64ChunkOf(b64, offset, unit) {
+  const len = b64.length
+  const start = Math.min(len, Math.max(0, Number(offset) || 0))
+  // 起点必须 4 对齐，否则前一片末尾补的 '=' 会跑到中间，拼出来就是坏图
+  const s = start - (start % 4)
+  const e = Math.min(len, s + unit)
   return {
-    base64: buf.toString('base64'),
-    mime: MIME_BY_EXT[extOfPath(id)] || 'image/jpeg',
-    size: buf.length
+    base64: b64.slice(s, e),
+    offset: s,
+    chunk: e - s,
+    done: e >= len
+  }
+}
+
+/**
+ * 取一片图片数据。offset=0 是起点；返回 done=true 表示最后一片。
+ * 客户端把每片的 base64 直接拼起来即可。
+ *
+ * 优先直存库（source='db'），没有再读云存储并补存（source='store'）。
+ */
+async function imageDataOf(fileID, offset = 0) {
+  const id = String(fileID || '').trim()
+  assert(id, 400, '缺少图片地址')
+  assert(/^cloud:\/\//.test(id) || /^https?:\/\//.test(id), 400, '图片地址不对')
+
+  const start = Math.max(0, Number(offset) || 0)
+
+  // 1. 数据库直存：不依赖云存储读取
+  const doc = await imgDocOf(id)
+  if (doc) {
+    const b64 = doc.b64
+    assert(start < b64.length, 400, '图片偏移量超出范围')
+    const part = b64ChunkOf(b64, start, IMG_DB_CHUNK)
+    return {
+      base64: part.base64,
+      mime: doc.mime || 'image/jpeg',
+      size: Number(doc.size) || b64ByteLen(b64),
+      offset: part.offset,
+      chunk: part.chunk,
+      done: part.done,
+      source: 'db'
+    }
+  }
+
+  // 2. 老图：从云存储读回来，顺手补存，下次就直接命中数据库
+  const { buf, mime } = await loadImageBuffer(id)
+  const b64 = b64OfBuf(buf)
+  assert(b64, 404, '图片读取失败，请重试')
+  const part = b64ChunkOf(b64, start, IMG_DB_CHUNK)
+  if (part.done) {
+    // 整个文件都在手里了才补存，避免把半张图存进去
+    saveImageData(id, b64, { mime, size: buf.length }).catch(() => {})
+  }
+  return {
+    base64: part.base64,
+    mime,
+    size: buf.length,
+    offset: part.offset,
+    chunk: part.chunk,
+    done: part.done,
+    source: 'store'
+  }
+}
+
+/** 清理很久没人看的直存图片（cron 调用），避免数据库无限长 */
+async function cleanImageData(days = IMG_DB_KEEP_DAYS) {
+  const before = Date.now() - Math.max(1, Number(days) || IMG_DB_KEEP_DAYS) * 86400000
+  try {
+    const r = await db.collection(COLL.images).where({ create_time: dbCmd.lt(before) }).remove()
+    return (r && r.deleted) || 0
+  } catch (e) {
+    return 0
   }
 }
 
@@ -1863,5 +2107,9 @@ module.exports = {
   chatConversations,
   uploadImageBase64,
   imageDataOf,
-  IMAGE_BYTES_MAX
+  saveImageData,
+  cleanImageData,
+  IMAGE_MAX_BYTES,
+  IMAGE_CHUNK,
+  IMAGE_DB_MAX_B64: IMG_DB_MAX_B64
 }

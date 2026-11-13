@@ -91,6 +91,22 @@
 | `mockPaySuccess(taskId)` | **仅 mock 模式可用**；配置了真实支付后调用会 403 |
 | `queryOrder(taskId)` | 主动查单（对账兜底） |
 | `handleNotify(headers, rawBody)` | 支付回调：验签 → 解密 → 幂等入账 |
+| `requestWithdraw({amount})` | 提现：扣余额 → 商家转账；返回 `{state, package_info, need_confirm, out_bill_no}` |
+| `queryWithdraw(outBillNo)` | 查询某笔提现在微信侧的真实状态（含 `package_info`，可再次拉起确认页） |
+| `myWithdrawals(limit)` | 我的提现记录（带 `state / state_text / rolled_back`） |
+| `syncWithdrawals()` | 同步在途提现状态；客户端调用会被要求管理员权限（定时任务用） |
+| `reissueWithdraw({outBillNo})` | 后台重发失败/过期的提现（内部接口，仅管理员/云函数） |
+
+### 提现状态机（`xyyx-withdrawals`）
+
+```
+pending ──▶ WAIT_USER_CONFIRM ──▶ TRANSFERING ──▶ SUCCESS
+   └────────── FAIL / CANCELLED / EXPIRED ──▶ 余额自动退回（rolled_back=true，只退一次）
+```
+
+> 图片接口：`getImageData(fileID, offset)` 返回 `{base64, mime, size, offset, chunk, done, source}`，
+> `source='db'` 表示来自 `xyyx-images` 直存（不读云存储），`source='store'` 表示读云存储并已补存。
+
 
 ---
 

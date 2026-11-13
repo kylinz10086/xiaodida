@@ -162,13 +162,16 @@ function createEnv(options = {}) {
         tempFileURL: 'https://cdn.test/' + encodeURIComponent(id)
       }))
     }),
-    downloadFile: async () => ({ fileContent: Buffer.from('fake-image-bytes') }),
+    downloadFile: async () => ({ fileContent: Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('fake-image-bytes')]) }),
     httpclient: {
       request: async (url, opts) => {
         state.lastHttp = { url, body: opts && opts.content ? JSON.parse(opts.content) : null }
-        // 图片下载走二进制桩，其余（微信退款/下单）保持原来的 JSON 桩
+        // 图片下载走二进制桩（带 JPEG 文件头，服务端会校验），其余（微信退款/下单）保持原来的 JSON 桩
         if (url && url.indexOf('https://cdn.test/') === 0) {
-          return { status: 200, data: Buffer.from('fake-image-bytes') }
+          return {
+            status: 200,
+            data: Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('fake-image-bytes')])
+          }
         }
         return options.httpResponse
           ? options.httpResponse(url, opts)

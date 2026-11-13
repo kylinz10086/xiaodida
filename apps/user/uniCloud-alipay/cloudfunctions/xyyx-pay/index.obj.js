@@ -333,7 +333,22 @@ async function openidOf(uid) {
   }
 }
 
+/** 本地回归测试开关：XYYX_WITHDRAW_MOCK=success|fail 时不真调微信，其它逻辑照常 */
+function transferMock() {
+  return String(process.env.XYYX_WITHDRAW_MOCK || '')
+}
+
 async function wxTransfer(body) {
+  const mock = transferMock()
+  if (mock) {
+    const ok = mock !== 'fail'
+    return {
+      status: 200,
+      data: ok
+        ? { state: 'SUCCESS', transfer_bill_no: 'mock_' + body.out_bill_no }
+        : { state: 'FAIL', fail_reason: '测试模拟转账失败' }
+    }
+  }
   const res = await wxRequest('POST', TRANSFER_PATH, body)
   return { status: res.status, data: res.data || {} }
 }
@@ -363,6 +378,175 @@ async function rollbackWithdraw(uid, amountCent, reason) {
       key: `withdraw-rollback:${uid}:${Date.now()}`
     })
   )
+}
+
+/* ------------------------------------------------------------------ */
+/* 提现单（每笔提现一条记录，状态可追踪、失败可重试、后台可核查）        */
+/* ------------------------------------------------------------------ */
+
+/** 还在途中的微信转账状态 */
+const WD_IN_FLIGHT = ['pending', 'ACCEPTED', 'TRANSFERING', 'PROCESSING', 'WAIT_USER_CONFIRM']
+
+function wdStateText(s) {
+  const map = {
+    pending: '提交中',
+    ACCEPTED: '已受理',
+    TRANSFERING: '转账中',
+    PROCESSING: '转账中',
+    WAIT_USER_CONFIRM: '待确认收款',
+    SUCCESS: '已到账',
+    FAIL: '转账失败',
+    CANCELLED: '已取消',
+    CANCELING: '取消中',
+    EXPIRED: '已过期'
+  }
+  return map[s] || s || '未知'
+}
+
+async function wdGet(no) {
+  try {
+    const r = await C.db.collection(C.COLL.withdrawals).doc(no).get()
+    return (r.data && r.data[0]) || null
+  } catch (e) {
+    return null
+  }
+}
+
+async function wdAdd(doc) {
+  try {
+    await C.db.collection(C.COLL.withdrawals).add(doc)
+    return true
+  } catch (e) {
+    // 集合还没建也要能把提现走完，只是后台少一条记录
+    console.warn('[xyyx-pay] 提现单写入失败（请确认已创建 yyx-withdrawals 集合）：', e && e.message)
+    return false
+  }
+}
+
+async function wdPatch(no, patch) {
+  try {
+    await C.db
+      .collection(C.COLL.withdrawals)
+      .doc(no)
+      .update(Object.assign({ update_time: Date.now() }, patch))
+  } catch (e) {}
+}
+
+/**
+ * 把微信返回的转账状态落到提现单上。
+ * 失败/取消/过期时冲正余额 —— 用 CAS（rolled_back 只能从 false 变 true）保证只退一次，
+ * 微信回调、轮询、定时任务三条路同时来也不会重复加钱。
+ */
+async function applyTransferState(doc, data, httpStatus) {
+  const no = doc._id
+  const state = String((data && data.state) || '')
+  const failReason = String((data && (data.fail_reason || data.message)) || '').slice(0, 120)
+  const billNo = (data && data.transfer_bill_no) || ''
+
+  if (state === 'SUCCESS') {
+    await wdPatch(no, { state: 'SUCCESS', transfer_bill_no: billNo, fail_reason: '', finish_time: Date.now() })
+    return 'SUCCESS'
+  }
+
+  const bad = state === 'FAIL' || state === 'CANCELLED' || state === 'EXPIRED' || (httpStatus && Number(httpStatus) !== 200)
+  if (!bad) {
+    await wdPatch(no, { state: state || 'PROCESSING', transfer_bill_no: billNo })
+    return state || 'PROCESSING'
+  }
+
+  let rolled = false
+  try {
+    const upd = await C.db
+      .collection(C.COLL.withdrawals)
+      .where({ _id: no, rolled_back: C.dbCmd.neq(true) })
+      .update({
+        state: state || 'FAIL',
+        rolled_back: true,
+        fail_reason: failReason || '转账失败',
+        finish_time: Date.now(),
+        update_time: Date.now()
+      })
+    rolled = Boolean(upd && upd.updated)
+  } catch (e) {
+    rolled = false
+  }
+
+  if (!rolled) {
+    await wdPatch(no, { state: state || 'FAIL', fail_reason: failReason || '转账失败' })
+    return state || 'FAIL'
+  }
+
+  try {
+    await rollbackWithdraw(doc.user_id, Number(doc.amount_cent) || 0, failReason || state)
+  } catch (e) {
+    console.error('[xyyx-pay] 提现冲正失败，需人工核账', doc._id, e && e.message)
+  }
+  return state || 'FAIL'
+}
+
+/**
+ * 真正发起一笔转账：登记提现单 → 调微信 → 落状态。
+ * requestWithdraw（用户发起）和 adminReissueWithdraw（后台重发）共用。
+ */
+async function issueTransfer({ uid, amountCent, outBillNo, openid, source }) {
+  const now = Date.now()
+  const doc = {
+    _id: outBillNo,
+    user_id: uid,
+    amount_cent: amountCent,
+    state: 'pending',
+    rolled_back: false,
+    fail_reason: '',
+    transfer_bill_no: '',
+    source: source || 'user',
+    create_time: now,
+    update_time: now
+  }
+  await wdAdd(doc)
+
+  let r
+  try {
+    r = await wxTransfer(transferBody({ openid, amountCent, outBillNo }))
+  } catch (e) {
+    await applyTransferState(doc, { state: 'FAIL', fail_reason: '网络异常' }, 0)
+    const ip = await egressIp()
+    const err = new C.BizError(500, `微信转账请求失败${ip ? '（出口IP ' + ip + '）' : ''}，金额已退回，请稍后再试`)
+    err.outBillNo = outBillNo
+    throw err
+  }
+
+  const d = (r && r.data) || {}
+  const state = await applyTransferState(doc, d, r && r.status)
+  const okState = state !== 'FAIL' && state !== 'CANCELLED' && state !== 'EXPIRED'
+  if (!okState) {
+    const ip = await egressIp()
+    const reason = d.message || d.fail_reason || `HTTP ${r.status}`
+    const err = new C.BizError(
+      400,
+      `微信转账失败：${reason}${ip ? '（出口IP ' + ip + '）' : ''}。${TRANSFER_IP_WHITELIST_HINT}`
+    )
+    err.outBillNo = outBillNo
+    throw err
+  }
+  return { state, data: d, outBillNo }
+}
+
+/** 提现单对外的样子（客户端/后台共用，不暴露内部字段） */
+function wdPub(d) {
+  const amount = Number(d.amount_cent) || 0
+  return {
+    out_bill_no: d._id,
+    amount: C.yuan(amount),
+    amount_cent: amount,
+    state: d.state || '',
+    state_text: wdStateText(d.state),
+    fail_reason: d.fail_reason || '',
+    rolled_back: Boolean(d.rolled_back),
+    transfer_bill_no: d.transfer_bill_no || '',
+    mchid: PAY_CONFIG.mchid || '',
+    appid: PAY_CONFIG.appid || '',
+    create_time: d.create_time || 0
+  }
 }
 
 const api = {
@@ -420,6 +604,7 @@ const api = {
 
     const openid = await openidOf(auth.uid)
     C.assert(openid, 400, '缺少微信 openid，请退出小程序重新登录后再试')
+    C.assert(isRealPay() || transferMock(), 400, '商户支付未配置，暂时无法提现到微信零钱')
 
     const outBillNo = 'WD' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
     const upd = await C.db
@@ -443,27 +628,8 @@ const api = {
       })
     )
 
-    let r
-    try {
-      r = await wxTransfer(transferBody({ openid, amountCent, outBillNo }))
-    } catch (e) {
-      const ip = await egressIp()
-      await rollbackWithdraw(auth.uid, amountCent, '网络异常')
-      throw new C.BizError(500, `微信转账请求失败${ip ? '（出口IP ' + ip + '）' : ''}，金额已退回，请稍后再试`)
-    }
-
-    const d = r.data || {}
-    const state = d.state || ''
-    if (r.status !== 200 || state === 'FAIL') {
-      const ip = await egressIp()
-      await rollbackWithdraw(auth.uid, amountCent, d.fail_reason || d.message || '转账失败')
-      const reason = d.message || d.fail_reason || `HTTP ${r.status}`
-      throw new C.BizError(
-        400,
-        `微信转账失败：${reason}${ip ? '（出口IP ' + ip + '）' : ''}。${TRANSFER_IP_WHITELIST_HINT}`
-      )
-    }
-
+    const r = await issueTransfer({ uid: auth.uid, amountCent, outBillNo, openid, source: 'user' })
+    const state = r.state
     const after = await C.ensureWallet(auth.uid)
     return C.ok(
       {
@@ -471,7 +637,7 @@ const api = {
         balance: C.yuan(after.balance_cent),
         out_bill_no: outBillNo,
         state,
-        package_info: d.package_info || '',
+        package_info: (r.data && r.data.package_info) || '',
         mchid: PAY_CONFIG.mchid || '',
         appid: PAY_CONFIG.appid || '',
         need_confirm: state === 'WAIT_USER_CONFIRM'
@@ -480,17 +646,148 @@ const api = {
     )
   },
 
-  /** 查询提现转账状态（用户确认收款后轮询用） */
+  /** 查询自己的提现转账状态（用户确认收款后轮询用） */
   async queryWithdraw(outBillNo) {
-    await C.requireAuth(this)
+    const auth = await C.requireAuth(this)
     const no = C.str(outBillNo, { min: 6, max: 64, name: '提现单号', required: true })
-    const r = await wxQueryTransfer(no)
-    const d = r.data || {}
+    const doc = await wdGet(no)
+    if (doc) C.assert(doc.user_id === auth.uid, 403, '无权查询这笔提现')
+
+    let state = (doc && doc.state) || ''
+    let pkg = ''
+    if (isRealPay() || transferMock()) {
+      try {
+        const r = await wxQueryTransfer(no)
+        const d = (r && r.data) || {}
+        pkg = d.package_info || ''
+        state = doc ? await applyTransferState(doc, d, r && r.status) : d.state || ''
+      } catch (e) {
+        // 查不到就按本地记录的状态返回，不让轮询直接报错
+      }
+    }
+    const latest = (await wdGet(no)) || doc || {}
     return C.ok({
-      state: d.state || '',
-      fail_reason: d.fail_reason || '',
-      transfer_bill_no: d.transfer_bill_no || ''
+      state,
+      state_text: wdStateText(state),
+      fail_reason: latest.fail_reason || '',
+      transfer_bill_no: latest.transfer_bill_no || '',
+      package_info: pkg
     })
+  },
+
+  /** 我的提现记录（钱包页显示最近几笔的状态） */
+  async myWithdrawals(limit = 10) {
+    const auth = await C.requireAuth(this)
+    const n = Math.min(20, Math.max(1, Number(limit) || 10))
+    try {
+      const res = await C.db
+        .collection(C.COLL.withdrawals)
+        .where({ user_id: auth.uid })
+        .orderBy('create_time', 'desc')
+        .limit(n)
+        .get()
+      return C.ok({ list: (res.data || []).map(wdPub) })
+    } catch (e) {
+      return C.ok({ list: [] })
+    }
+  },
+
+  /**
+   * 同步在途提现的真实状态（定时任务调用）。
+   * 用户点了「确认收款」却没回调、或者确认页超时消失，都靠这里兜底把余额冲正。
+   */
+  async syncWithdrawals() {
+    const info = typeof this.getClientInfo === 'function' ? this.getClientInfo() : {}
+    // 客户端也能调（方便手动刷新），但只允许管理员，避免被刷接口
+    if (info && info.source === 'client') await C.requireAdmin(this)
+
+    const scanned = { n: 0, updated: 0 }
+    if (!isRealPay() && !transferMock()) return C.ok({ scanned: 0, updated: 0, tip: '未配置商户支付' })
+    try {
+      const res = await C.db
+        .collection(C.COLL.withdrawals)
+        .where({ state: C.dbCmd.in(WD_IN_FLIGHT), rolled_back: C.dbCmd.neq(true) })
+        .orderBy('create_time', 'asc')
+        .limit(20)
+        .get()
+      const list = res.data || []
+      scanned.n = list.length
+      for (const doc of list) {
+        // 刚提交的先别查，微信那边还没落状态
+        if (Date.now() - (Number(doc.create_time) || 0) < 30000) continue
+        let r
+        try {
+          r = await wxQueryTransfer(doc._id)
+        } catch (e) {
+          continue
+        }
+        const before = doc.state
+        const st = await applyTransferState(doc, (r && r.data) || {}, r && r.status)
+        if (st !== before) scanned.updated++
+      }
+    } catch (e) {
+      console.warn('[xyyx-pay] 同步提现状态失败', e && e.message)
+    }
+    return C.ok({ scanned: scanned.n, updated: scanned.updated })
+  },
+
+  /**
+   * 后台重发一笔失败/过期的提现。
+   * 失败时钱已经退回余额（rolled_back=true），这里重新扣一次再发起转账，
+   * 单号是新的，不会和微信侧历史单冲突。
+   */
+  async reissueWithdraw(data = {}) {
+    const info = typeof this.getClientInfo === 'function' ? this.getClientInfo() : {}
+    if (!info || info.source === 'client') await C.requireAdmin(this)
+
+    const no = C.str(data.outBillNo, { min: 6, max: 64, name: '提现单号', required: true })
+    const doc = await wdGet(no)
+    C.assert(doc, 404, '提现单不存在')
+    C.assert(['FAIL', 'CANCELLED', 'EXPIRED'].indexOf(doc.state) >= 0, 400, '只有失败/取消/过期的提现才能重发')
+    C.assert(doc.rolled_back, 400, '这笔提现的钱还没退回余额，先核对余额再重发')
+    C.assert(isRealPay() || transferMock(), 400, '商户支付未配置，无法重发')
+
+    const uid = doc.user_id
+    const amountCent = Number(doc.amount_cent) || 0
+    C.assert(amountCent > 0, 400, '提现金额异常')
+    const openid = await openidOf(uid)
+    C.assert(openid, 400, '该用户缺少微信 openid，让对方重新登录一次小程序')
+
+    const wallet = await C.ensureWallet(uid)
+    C.assert(Number(wallet.balance_cent) >= amountCent, 400, '用户当前余额不足，无法重发')
+
+    const outBillNo = 'WD' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+    const upd = await C.db
+      .collection(C.COLL.wallets)
+      .where({ _id: uid, balance_cent: C.dbCmd.gte(amountCent) })
+      .update({
+        balance_cent: C.dbCmd.inc(-amountCent),
+        withdrawn_cent: C.dbCmd.inc(amountCent),
+        update_time: Date.now()
+      })
+    C.assert(upd.updated === 1, 409, '余额已变化，请刷新')
+
+    await C.db.collection(C.COLL.transactions).add(
+      C.txDoc({
+        type: C.TX_TYPE.WITHDRAW,
+        uid,
+        taskId: '',
+        amountCent: -amountCent,
+        remark: '提现重发（商家转账）',
+        key: `withdraw:${uid}:${outBillNo}`
+      })
+    )
+
+    const r = await issueTransfer({ uid, amountCent, outBillNo, openid, source: 'admin' })
+    return C.ok(
+      {
+        out_bill_no: outBillNo,
+        state: r.state,
+        state_text: wdStateText(r.state),
+        need_confirm: r.state === 'WAIT_USER_CONFIRM'
+      },
+      r.state === 'WAIT_USER_CONFIRM' ? '已重发，需要用户在小程序里确认收款' : '已重新发起转账'
+    )
   },
 
   /**

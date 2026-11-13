@@ -38,6 +38,26 @@
 			</view>
 		</view>
 
+		<!-- 提现记录（微信商家转账状态） -->
+		<view class="card" v-if="withdrawals.length">
+			<view class="card-title">
+				<text>最近提现</text>
+				<text class="card-extra">到账状态实时同步</text>
+			</view>
+
+			<view class="wd" v-for="w in withdrawals" :key="w.out_bill_no">
+				<view class="wd-left">
+					<text class="wd-amount">¥{{ money(w.amount) }}</text>
+					<text class="wd-time">{{ formatTime(w.create_time) }}</text>
+					<text class="wd-reason" v-if="w.fail_reason">{{ w.fail_reason }}{{ w.rolled_back ? '（已退回余额）' : '' }}</text>
+				</view>
+				<view class="wd-right">
+					<text class="wd-state" :class="stateClassMap[w.state] || 'doing'">{{ w.state_text }}</text>
+					<text class="wd-confirm" v-if="w.state === 'WAIT_USER_CONFIRM'" @click="resumeConfirm(w)">去确认</text>
+				</view>
+			</view>
+		</view>
+
 		<!-- 明细 -->
 		<view class="card">
 			<view class="card-title">
@@ -73,6 +93,7 @@
 			return {
 				amount: '',
 				submitting: false,
+				withdrawals: [],
 				// 与云函数 xyyx-rider 里的风控常量保持一致
 				maxWithdraw: 200,
 				maxDaily: 500
@@ -88,12 +109,27 @@
 				const balance = Number(this.wallet.balance) || 0
 				const list = [3, 5, 10].filter((n) => n <= balance)
 				return list
+			},
+			/** 提现状态 → 颜色类名（模板里不能直接调方法，走映射表） */
+			stateClassMap() {
+				return {
+					SUCCESS: 'done',
+					WAIT_USER_CONFIRM: 'wait',
+					FAIL: 'fail',
+					CANCELLED: 'fail',
+					EXPIRED: 'fail',
+					pending: 'doing',
+					PROCESSING: 'doing',
+					TRANSFERING: 'doing',
+					ACCEPTED: 'doing'
+				}
 			}
 		},
 		onShow() { this.load() },
 		onPullDownRefresh() { this.load().finally(() => uni.stopPullDownRefresh()) },
 		methods: {
-			...mapActions('rider', ['fetchWallet', 'requestWithdraw', 'queryWithdraw']),
+			...mapActions('rider', ['fetchWallet', 'requestWithdraw', 'queryWithdraw', 'fetchWithdrawals']),
+
 
 			money(n) {
 				const num = Number(n) || 0
@@ -119,6 +155,42 @@
 			async load() {
 				try { await this.fetchWallet() }
 				catch (e) { uni.showToast({ title: errText(e, '加载失败'), icon: 'none' }) }
+				try { this.withdrawals = await this.fetchWithdrawals(8) }
+				catch (e) { this.withdrawals = [] }
+			},
+
+			/** 待确认收款的单子：重新拿 package_info 再拉一次微信确认页 */
+			async resumeConfirm(w) {
+				if (!w || !w.out_bill_no) return
+				uni.showLoading({ title: '查询中…', mask: true })
+				try {
+					const d = await this.queryWithdraw(w.out_bill_no)
+					uni.hideLoading()
+					if (d.state === 'SUCCESS') {
+						uni.showToast({ title: '已到账微信零钱', icon: 'none' })
+						return this.load()
+					}
+					if (!d.package_info) {
+						uni.showModal({
+							title: '确认已过期',
+							content: '这笔提现的确认收款已超时，微信会自动取消，金额会退回余额。稍等一会儿刷新，或者重新发起一次提现。',
+							showCancel: false
+						})
+						return this.load()
+					}
+					const ok = await this.confirmTransfer({
+						mchid: w.mchid || '',
+						appid: w.appid || '',
+						package_info: d.package_info
+					})
+					if (ok) {
+						await this.pollWithdraw(w.out_bill_no)
+					}
+					await this.load()
+				} catch (e) {
+					uni.hideLoading()
+					uni.showToast({ title: errText(e, '查询失败'), icon: 'none' })
+				}
 			},
 
 			fillAll() {
@@ -296,6 +368,43 @@
 	}
 
 	.tip { display: block; margin-top: 16rpx; font-size: 22rpx; color: #8e8e93; line-height: 1.6; }
+
+	.wd {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 20rpx 0;
+		border-bottom: 1rpx solid #f6f6f8;
+
+		&:last-child { border-bottom: none; }
+	}
+
+	.wd-left { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+	.wd-amount { font-size: 30rpx; font-weight: 600; color: #1c1c1e; }
+	.wd-time { margin-top: 6rpx; font-size: 21rpx; color: #8e8e93; }
+	.wd-reason { margin-top: 6rpx; font-size: 21rpx; color: #ff3b30; }
+
+	.wd-right { display: flex; align-items: center; margin-left: 20rpx; }
+
+	.wd-state {
+		font-size: 23rpx;
+		padding: 6rpx 16rpx;
+		border-radius: 14rpx;
+
+		&.done { color: #34c759; background: rgba(52, 199, 89, 0.1); }
+		&.wait { color: #ff9500; background: rgba(255, 149, 0, 0.12); }
+		&.fail { color: #ff3b30; background: rgba(255, 59, 48, 0.1); }
+		&.doing { color: #007aff; background: rgba(0, 122, 255, 0.1); }
+	}
+
+	.wd-confirm {
+		margin-left: 12rpx;
+		font-size: 23rpx;
+		color: #fff;
+		background: #ff9500;
+		padding: 8rpx 18rpx;
+		border-radius: 16rpx;
+	}
 
 	.tx {
 		display: flex;

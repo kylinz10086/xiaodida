@@ -305,6 +305,12 @@
 					}
 				},
 				{
+					"path": "withdrawals/list",
+					"style": {
+						"navigationBarTitleText": "提现记录"
+					}
+				},
+				{
 					"path": "settings/settings",
 					"style": {
 						"navigationBarTitleText": "系统设置"

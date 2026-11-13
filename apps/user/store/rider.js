@@ -316,6 +316,14 @@ export default {
 			const res = await pay.queryWithdraw(outBillNo)
 			if (res.code !== 0) throw new Error(res.msg)
 			return res.data || {}
+		},
+
+		/** 我的提现记录（带微信转账状态：待确认/已到账/失败已退回） */
+		async fetchWithdrawals(_, limit = 8) {
+			const pay = uniCloud.importObject('xyyx-pay', { customUI: true })
+			const res = await pay.myWithdrawals(limit)
+			if (res.code !== 0) throw new Error(res.msg)
+			return (res.data && res.data.list) || []
 		}
 	}
 }

@@ -1,0 +1,23 @@
+{
+  "bsonType": "object",
+  "required": ["user_id", "amount_cent", "state"],
+  "permission": { "read": false, "create": false, "update": false, "delete": false },
+  "description": "提现单。每笔提现一条（_id = out_bill_no），记录微信商家转账的真实状态：提交中/待确认收款/转账中/已到账/失败。失败或过期会自动冲正余额（rolled_back 保证只退一次），后台可按此表核查与重发。",
+  "properties": {
+    "_id": { "description": "out_bill_no（服务端生成，≤32 位）" },
+    "user_id": { "bsonType": "string", "description": "提现用户（骑手）" },
+    "amount_cent": { "bsonType": "int", "minimum": 1, "description": "提现金额（分）" },
+    "state": {
+      "bsonType": "string",
+      "description": "微信转账状态：pending / WAIT_USER_CONFIRM / TRANSFERING / SUCCESS / FAIL / CANCELLED / EXPIRED"
+    },
+    "state_text": { "bsonType": "string", "description": "状态中文（展示用）" },
+    "rolled_back": { "bsonType": "bool", "description": "是否已把金额退回余额（幂等标记，只退一次）" },
+    "fail_reason": { "bsonType": "string", "description": "失败原因" },
+    "transfer_bill_no": { "bsonType": "string", "description": "微信转账单号" },
+    "source": { "bsonType": "string", "enum": ["user", "admin"], "description": "user=用户发起；admin=后台重发" },
+    "create_time": { "bsonType": "timestamp" },
+    "update_time": { "bsonType": "timestamp" },
+    "finish_time": { "bsonType": "timestamp" }
+  }
+}

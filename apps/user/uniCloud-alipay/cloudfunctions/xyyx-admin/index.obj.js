@@ -173,6 +173,161 @@ const api = {
   },
 
   /**
+   * 提现记录（1.11.0 起读 yyx-withdrawals：带微信转账真实状态）
+   *
+   * 提现已经接了微信「商家转账到零钱」，每笔都有一条提现单：
+   *   pending/WAIT_USER_CONFIRM/TRANSFERING → 在途
+   *   SUCCESS → 已到账
+   *   FAIL/CANCELLED/EXPIRED → 失败（rolled_back=true 表示钱已退回余额）
+   * 老数据只有 withdraw 流水（没有提现单），一并列出来，标成「历史记账」。
+   */
+  async listWithdrawals(params = {}) {
+    await C.requireAdmin(this)
+    const page = C.int(params.page || 1, { min: 1, max: 9999, name: '页码' })
+    const pageSize = C.int(params.pageSize || 20, { min: 1, max: 100, name: '每页条数' })
+    const keyword = String(params.keyword || '').trim().toLowerCase()
+    const stateFilter = String(params.state || '').trim()
+
+    const stateText = (s) => {
+      const map = {
+        pending: '提交中',
+        ACCEPTED: '已受理',
+        TRANSFERING: '转账中',
+        PROCESSING: '转账中',
+        WAIT_USER_CONFIRM: '待确认收款',
+        SUCCESS: '已到账',
+        FAIL: '转账失败',
+        CANCELLED: '已取消',
+        CANCELING: '取消中',
+        EXPIRED: '已过期'
+      }
+      return map[s] || s || '历史记账'
+    }
+
+    let rows = []
+    try {
+      const res = await C.db
+        .collection(C.COLL.withdrawals)
+        .orderBy('create_time', 'desc')
+        .limit(500)
+        .get()
+      rows = res.data || []
+    } catch (e) {
+      rows = []
+    }
+
+    // 老流水兜底：没有提现单的历史提现
+    let legacy = []
+    try {
+      const txRes = await C.db
+        .collection(C.COLL.transactions)
+        .where({ type: C.TX_TYPE.WITHDRAW })
+        .orderBy('create_time', 'desc')
+        .limit(300)
+        .get()
+      const known = new Set(rows.map((r) => String(r.user_id) + ':' + (Number(r.amount_cent) || 0)))
+      legacy = (txRes.data || [])
+        .filter((t) => (Number(t.amount_cent) || 0) < 0)
+        .filter((t) => !known.has(String(t.user_id) + ':' + Math.abs(Number(t.amount_cent) || 0)))
+        .map((t) => ({
+          _id: t._id,
+          user_id: t.user_id || '',
+          amount_cent: Math.abs(Number(t.amount_cent) || 0),
+          state: '',
+          fail_reason: '',
+          legacy: true,
+          create_time: t.create_time
+        }))
+    } catch (e) {
+      legacy = []
+    }
+
+    const merged = rows
+      .map((r) => ({
+        _id: r._id,
+        user_id: r.user_id || '',
+        amount_cent: Number(r.amount_cent) || 0,
+        state: r.state || '',
+        rolled_back: Boolean(r.rolled_back),
+        fail_reason: r.fail_reason || '',
+        transfer_bill_no: r.transfer_bill_no || '',
+        source: r.source || 'user',
+        legacy: false,
+        create_time: r.create_time
+      }))
+      .concat(legacy)
+
+    const profileMap = await profilesByIds(Array.from(new Set(merged.map((r) => r.user_id).filter(Boolean))))
+
+    const all = merged
+      .sort((a, b) => (Number(b.create_time) || 0) - (Number(a.create_time) || 0))
+      .map((r) => {
+        const p = profileMap[r.user_id] || {}
+        return {
+          _id: r._id,
+          out_bill_no: r.legacy ? '' : r._id,
+          user_id: r.user_id,
+          nickname: p.nickname || '未知用户',
+          mobile: C.maskMobile(p.mobile || ''),
+          amount: C.yuan(r.amount_cent),
+          amount_cent: r.amount_cent,
+          state: r.state,
+          state_text: r.legacy ? '历史记账（无转账单）' : stateText(r.state),
+          rolled_back: r.rolled_back,
+          fail_reason: r.fail_reason,
+          transfer_bill_no: r.transfer_bill_no,
+          source: r.source,
+          legacy: r.legacy,
+          can_retry: !r.legacy && ['FAIL', 'CANCELLED', 'EXPIRED'].indexOf(r.state) >= 0,
+          create_time: timeOf(r.create_time)
+        }
+      })
+
+    const keywordHit = keyword
+      ? all.filter((r) => [r.user_id, r.nickname, r.out_bill_no, r.fail_reason].some((v) => String(v || '').toLowerCase().includes(keyword)))
+      : all
+    const filtered = stateFilter ? keywordHit.filter((r) => r.state === stateFilter) : keywordHit
+
+    const start = (page - 1) * pageSize
+    return C.ok({
+      list: filtered.slice(start, start + pageSize),
+      total: filtered.length,
+      page,
+      pageSize,
+      summary: {
+        count: filtered.length,
+        amount: C.yuan(filtered.reduce((s, r) => s + r.amount_cent, 0)),
+        success: filtered.filter((r) => r.state === 'SUCCESS').length,
+        inflight: filtered.filter((r) => ['pending', 'ACCEPTED', 'TRANSFERING', 'PROCESSING', 'WAIT_USER_CONFIRM'].indexOf(r.state) >= 0).length,
+        failed: filtered.filter((r) => ['FAIL', 'CANCELLED', 'EXPIRED'].indexOf(r.state) >= 0).length,
+        returned: filtered.filter((r) => r.rolled_back).length
+      }
+    })
+  },
+
+  /** 后台触发一次在途提现状态同步（等同定时任务里那一步，方便手动核对） */
+  async syncWithdrawals() {
+    await C.requireAdmin(this)
+    const pay = uniCloud.importObject('xyyx-pay', { customUI: true })
+    const r = await pay.syncWithdrawals()
+    return C.ok(r.data || {}, r.msg || '已同步')
+  },
+
+  /** 后台重发一笔失败/过期的提现（钱之前已经退回余额，这里重新扣一次再发起转账） */
+  async reissueWithdraw(params = {}) {
+    const auth = await C.requireAdmin(this)
+    const no = C.str(params.outBillNo || params._id, { min: 6, max: 64, name: '提现单号', required: true })
+    const res = await C.db.collection(C.COLL.withdrawals).doc(no).get()
+    const doc = res.data && res.data[0]
+    C.assert(doc, 404, '提现单不存在')
+    C.assert(['FAIL', 'CANCELLED', 'EXPIRED'].indexOf(doc.state) >= 0, 400, '只有失败/取消/过期的提现才能重发')
+
+    const pay = uniCloud.importObject('xyyx-pay', { customUI: true })
+    const r = await pay.reissueWithdraw({ outBillNo: no, operator: auth.uid })
+    return C.ok(r.data || {}, r.msg || '已重新发起转账')
+  },
+
+  /**
    * 管理员手动重试一笔失败的退款（钱退不出去时人工兜一下）
    */
   async retryRefund(params = {}) {

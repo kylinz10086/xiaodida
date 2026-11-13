@@ -134,12 +134,13 @@ async function pickAvatar(filePath, sizes, maxLen) {
  */
 export async function fetchImageData(role, fileID, onProgress) {
 	const id = String(fileID || '').trim()
-	if (id.indexOf('cloud://') !== 0) return ''
+	if (!/^cloud:\/\//.test(id) && !/^https?:\/\//.test(id)) return ''
 	const api = apiOf(role)
 	const parts = []
 	let offset = 0
 	let mime = 'image/jpeg'
 	let size = 0
+	let source = ''
 	for (let i = 0; i < 80; i++) {
 		const res = await api.getImageData(id, offset)
 		if (!res || res.code !== 0) throw new Error((res && res.msg) || '图片读取失败')
@@ -148,35 +149,114 @@ export async function fetchImageData(role, fileID, onProgress) {
 		parts.push(d.base64)
 		mime = d.mime || mime
 		size = d.size || size
+		source = d.source || source
 		if (typeof onProgress === 'function') onProgress(offset, size)
 		// 兼容旧版云函数：只返回整张图，没有分片字段
 		if (d.chunk === undefined || d.done === undefined) break
-		offset += d.chunk
+		// 服务端会告诉我们下一片从哪开始（base64 分片必须 4 字符对齐）
+		offset = Number(d.offset) + Number(d.chunk)
 		if (d.done) break
 		if (!d.chunk) throw new Error('图片分片异常')
 	}
-	return 'data:' + mime + ';base64,' + parts.join('')
+	const uri = 'data:' + mime + ';base64,' + parts.join('')
+	return uri
+}
+
+/** 最近解出来的图片地址缓存：同一个 fileID 不重复取（预览和气泡共用） */
+const srcCache = new Map()
+const SRC_CACHE_MAX = 16
+
+function cacheSet(key, val) {
+	if (!key || !val) return
+	if (srcCache.size >= SRC_CACHE_MAX) {
+		const first = srcCache.keys().next().value
+		srcCache.delete(first)
+	}
+	srcCache.set(key, val)
 }
 
 /**
- * 分片取原图，边取边 append 到本地临时文件。
+ * 解出一张图「能画出来」的 src —— 依次尝试三条完全不同的路径：
+ *   1. data   ：云函数分片取 base64，拼成 data URI 交给 <image>（不落盘、不看域名，最稳）
+ *   2. file   ：同样的数据写成本地临时文件再画（data URI 太大被微信拒掉时用）
+ *   3. url    ：云存储临时链接（前两条都失败、但小程序后台配过域名时能救）
  *
- * 不先拼成一个巨大的 base64 字符串：大图（接近 1MB）拼完再 writeFile，
- * 小程序容易卡住/写失败。这里每片直接 appendFileSync(..., 'base64')，
- * 每片长度服务端保证是 3 的倍数，逐片解码不会有填充问题。
+ * 返回 { src, method, errors }：method 用来在页面上显示走了哪条路，
+ * errors 是每条路各自失败的原因（现场排查用，不用再猜）。
+ */
+export async function resolveImageSrc(role, fileID, opts = {}) {
+	const id = String(fileID || '').trim()
+	const skip = opts.skip || {}
+	const errors = []
+	const cached = srcCache.get(id)
+	if (cached && !(skip[cached.method] || (opts.maxAge && Date.now() - cached.at > opts.maxAge))) {
+		return { src: cached.src, method: cached.method, errors }
+	}
+	const hit = (src, method) => {
+		cacheSet(id, { src, method, at: Date.now() })
+		return { src, method, errors }
+	}
+
+	if (!skip.data) {
+		try {
+			const uri = await fetchImageData(role, id)
+			// data URI 太大时微信会直接不画（setData 单次上限 1MB），宁可走落盘
+			const maxLen = Number(opts.maxDataLen) || 900000
+			if (uri && uri.length <= maxLen) return hit(uri, 'data')
+			if (uri) errors.push('直读:图片太大（' + Math.round(uri.length / 1024) + 'KB）')
+		} catch (e) {
+			errors.push('直读:' + ((e && e.message) || '失败'))
+		}
+	}
+
+	if (!skip.file) {
+		try {
+			const path = await fetchImageToTempFile(role, id)
+			if (path) return hit(path, 'file')
+		} catch (e) {
+			errors.push('落盘:' + ((e && e.message) || '失败'))
+		}
+	}
+
+	if (!skip.url) {
+		try {
+			const map = await getTempUrls([id])
+			if (map[id]) return hit(map[id], 'url')
+		} catch (e) {
+			errors.push('链接:' + ((e && e.message) || '失败'))
+		}
+	}
+
+	return { src: '', method: '', errors }
+}
+
+/** 清掉某张图的缓存（点「重试」时用） */
+export function forgetImageSrc(fileID) {
+	srcCache.delete(String(fileID || '').trim())
+}
+
+/**
+ * 分片取原图，最后一次性写成本地文件。
+ *
+ * 之前是每片 appendFileSync(base64) —— 微信的 appendFile 对 base64 解码并不可靠，
+ * 多片拼出来的文件会坏掉，表现就是「小图能看、大图全黑 + 原图显示失败」。
+ * 现在改成：分片取回先拼 base64，最后 writeFileSync 一次写入，并校验文件大小；
+ * 写失败再退一步用 base64ToArrayBuffer 写。
  */
 export function fetchImageToTempFile(role, fileID) {
-	return new Promise((resolve) => {
+	return new Promise((resolve, reject) => {
 		const id = String(fileID || '').trim()
-		if (id.indexOf('cloud://') !== 0) return resolve('')
+		const isRef = /^cloud:\/\//.test(id) || /^https?:\/\//.test(id)
+		if (!isRef) return reject(new Error('图片地址无效'))
 		const fs = typeof wx !== 'undefined' && wx.getFileSystemManager ? wx.getFileSystemManager() : null
 		const base = (typeof wx !== 'undefined' && wx.env && wx.env.USER_DATA_PATH) || ''
-		if (!fs || !base) return resolve('')
+		if (!fs || !base) return reject(new Error('当前环境不支持保存图片'))
 
 		const api = apiOf(role)
 		const filePath = `${base}/img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`
+		const parts = []
 		let offset = 0
-		let started = false
+		let total = 0
 
 		const run = async () => {
 			try {
@@ -185,21 +265,37 @@ export function fetchImageToTempFile(role, fileID) {
 					if (!res || res.code !== 0) throw new Error((res && res.msg) || '图片读取失败')
 					const d = res.data || {}
 					if (!d.base64) throw new Error('图片数据为空')
-					if (!started) {
-						fs.writeFileSync(filePath, d.base64, 'base64')
-						started = true
-					} else {
-						fs.appendFileSync(filePath, d.base64, 'base64')
-					}
+					parts.push(d.base64)
+					total = Number(d.size) || total
 					// 兼容旧版云函数（整张图一次返回）
 					if (d.chunk === undefined || d.done === undefined) break
-					offset += d.chunk
+					offset = Number(d.offset) + Number(d.chunk)
 					if (d.done) break
 					if (!d.chunk) throw new Error('图片分片异常')
 				}
-				resolve(started ? filePath : '')
+
+				const b64 = parts.join('')
+				let wrote = false
+				try {
+					fs.writeFileSync(filePath, b64, 'base64')
+					wrote = true
+				} catch (e) {
+					wrote = false
+				}
+				if (!wrote && typeof wx !== 'undefined' && wx.base64ToArrayBuffer) {
+					fs.writeFileSync(filePath, wx.base64ToArrayBuffer(b64))
+					wrote = true
+				}
+				if (!wrote) throw new Error('图片写入本地失败')
+
+				// 校验大小：多片拼接如果出错，这里能立刻发现，而不是丢给 <image> 黑屏
+				const st = fs.statSync(filePath)
+				if (total && st && st.size !== total) {
+					throw new Error('图片不完整（' + st.size + '/' + total + '）')
+				}
+				resolve(filePath)
 			} catch (e) {
-				resolve('')
+				reject(e instanceof Error ? e : new Error('图片读取失败'))
 			}
 		}
 		run()

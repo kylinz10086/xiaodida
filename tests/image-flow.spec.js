@@ -150,13 +150,61 @@ async function main() {
   const img = await call(userObj.getImageData, 'cloud://env-test/chat1.jpg')
   eq(img.code, 0, '取图 ok: ' + img.msg)
   eq(img.data.mime, 'image/jpeg', 'mime 正确')
-  eq(Buffer.from(img.data.base64, 'base64').toString(), 'fake-image-bytes', 'base64 是真实图片内容')
+  const got = Buffer.from(img.data.base64, 'base64')
+  eq(got[0], 0xff, 'JPEG 文件头正确（0xFF）')
+  eq(got[1], 0xd8, 'JPEG 文件头正确（0xD8）')
   eq(img.data.done, true, '小图一次返回完（done=true）')
-  eq(img.data.size, 16, '返回原始字节数')
+  eq(img.data.size, got.length, '返回原始字节数')
   const over = await call(userObj.getImageData, 'cloud://env-test/chat1.jpg', 999)
   eq(over.code, 400, '偏移量超出图片大小被拒')
   const badImg = await call(userObj.getImageData, 'not-a-file')
   eq(badImg.code, 400, '非法地址被拒')
+
+  console.log('\n[9] 图片字节直存数据库（1.11.0，看图不碰云存储）')
+  const bigBuf = Buffer.concat([
+    Buffer.from([0xff, 0xd8]),
+    Buffer.alloc(300 * 1024, 7),
+    Buffer.from([0xff, 0xd9])
+  ])
+  const bigB64 = bigBuf.toString('base64')
+  await C.saveImageData('cloud://env-test/db.jpg', bigB64, { size: bigBuf.length })
+
+  const p1 = await call(userObj.getImageData, 'cloud://env-test/db.jpg', 0)
+  eq(p1.code, 0, '直存取图 ok: ' + p1.msg)
+  eq(p1.data.source, 'db', 'source=db（没有去读云存储）')
+  eq(p1.data.done, false, '300KB 图需要分片')
+  let acc = p1.data.base64
+  let off = p1.data.offset + p1.data.chunk
+  let done = p1.data.done
+  let guard = 0
+  while (!done && guard++ < 20) {
+    const p = await call(userObj.getImageData, 'cloud://env-test/db.jpg', off)
+    eq(p.code, 0, '第 ' + (guard + 1) + ' 片 ok')
+    acc += p.data.base64
+    off = p.data.offset + p.data.chunk
+    done = p.data.done
+  }
+  ok(acc === bigB64, '分片拼回来和原 base64 完全一致')
+  eq(Buffer.from(acc, 'base64').length, bigBuf.length, '解码后字节数一致')
+  eq(p1.data.size, bigBuf.length, 'size 是解码后的字节数')
+  eq(p1.data.chunk % 4, 0, '分片长度是 4 的倍数（base64 对齐）')
+
+  console.log('\n[10] 老图自愈：读云存储成功后自动补存')
+  const firstRead = await call(userObj.getImageData, 'cloud://env-test/heal.jpg', 0)
+  eq(firstRead.code, 0, '老图第一次能读出来')
+  eq(firstRead.data.source, 'store', '第一次走云存储')
+  const secondRead = await call(userObj.getImageData, 'cloud://env-test/heal.jpg', 0)
+  eq(secondRead.data.source, 'db', '第二次直接命中直存（已自愈）')
+  ok(secondRead.data.base64 === firstRead.data.base64, '两次取到的内容一致')
+
+  console.log('\n[11] 超大图不进数据库（避免文档过大）')
+  const huge = Buffer.alloc(700 * 1024, 9)
+  huge[0] = 0xff
+  huge[1] = 0xd8
+  const key = await C.saveImageData('cloud://env-test/huge.jpg', huge.toString('base64'))
+  eq(key, '', '超过 620KB 不写库')
+  const hugeRead = await call(userObj.getImageData, 'cloud://env-test/huge.jpg', 0)
+  eq(hugeRead.data.source, 'store', '超大图仍能通过云存储读出来')
 
   console.log('\n-----------------------------')
   console.log('passed ' + passed + ', failed ' + failures.length)

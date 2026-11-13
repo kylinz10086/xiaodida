@@ -639,7 +639,7 @@ const api = {
     const auth = await C.requireAuth(this)
     await C.checkNonce(auth, data.nonce, data.timestamp)
     await C.rateLimit(auth, 'upload', 30, 10 * 60 * 1000)
-    return C.ok(await C.uploadImageBase64(data.base64, { ext: data.ext, dir: data.dir }), '上传成功')
+    return C.ok(await C.uploadImageBase64(data.base64, { ext: data.ext, dir: data.dir, uid: auth.uid }), '上传成功')
   },
 
   /**
@@ -647,10 +647,10 @@ const api = {
    * 客户端 <image> 依赖 downloadFile 域名白名单，云存储域名没配就裂图；
    * 这里让云函数把图取回来，客户端用 data URI 显示 / 预览。
    */
-  async getImageData(fileID) {
+  async getImageData(fileID, offset = 0) {
     const auth = await C.requireAuth(this)
-    await C.rateLimit(auth, 'image', 120, 60 * 1000)
-    return C.ok(await C.imageDataOf(fileID), 'ok')
+    await C.rateLimit(auth, 'image', 600, 60 * 1000)
+    return C.ok(await C.imageDataOf(fileID, offset), 'ok')
   },
 
   /* ---------------- 订单内聊天 ---------------- */

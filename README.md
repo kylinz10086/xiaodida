@@ -11,6 +11,43 @@
 
 ---
 
+## 2026-11-14 · v1.11.0（图片换方案：字节直存数据库；提现全链路闭环）
+
+### 图片：不再依赖云存储读取 / CDN 域名 / 本地文件系统
+
+真机上「看图黑屏」已经修了三轮（分片、落盘、预览页），链路里任何一环在真机上出问题都难定位。
+这一版直接**换掉整条链路**：
+
+- 上传时（`uploadImageBase64`）顺手把压缩后的图 `base64` 存进新集合 **`xyyx-images`**
+  （`_id = i_ + md5(fileID)`，≤620KB 才存，超过仍走云存储兜底）。
+- `getImageData(fileID, offset)` 优先返回数据库里的切片（`source:'db'`，按 4 字符对齐切，客户端直接拼）；
+  老图没有直存记录时读云存储，**读成功就自动补存**，下次直接命中，无需迁移脚本。
+- 客户端新增 `resolveImageSrc()`：三条完全独立的路径依次兜底，并把每条失败原因带回页面
+  - `data`（云函数分片 → data URI 直接交给 `<image>`，不落盘、不看域名）
+  - `file`（同样的字节写本地临时文件，data URI 超过 900KB 时用）
+  - `url`（云存储临时链接，最后兜底）
+- 预览页底部会显示走了哪条路（`原图 · 直读` / `原图 · 本地文件` / `原图 · 临时链接`）；
+  三条都失败才显示具体原因（`直读:…；落盘:…；链接:…`），可点「重试」。
+- 聊天页老消息、订单详情页图片都改走 `resolveImageSrc`；聊天图片上传压到 1280 宽 / quality 65，
+  绝大多数落在 620KB 以内，直接命中数据库直存。
+- `xyyx-cron` 每天清理 120 天前的直存图片（`cleanImageData`）。
+
+### 提现：状态可追踪、失败自动退回、后台可核查可重发
+
+- 新增集合 **`xyyx-withdrawals`**：每笔提现一条（`_id = out_bill_no`），记录微信转账状态
+  （`pending / WAIT_USER_CONFIRM / TRANSFERING / SUCCESS / FAIL / CANCELLED / EXPIRED`）。
+- `requestWithdraw` 走 `issueTransfer()`：登记提现单 → 调微信 `transfer-bills` → 落状态。
+- **失败只退一次**：冲正用 CAS（`rolled_back` 只能 false→true），微信回调 / 用户轮询 / 定时任务
+  三条路同时来也不会重复加钱。
+- 新增 `xyyx-pay.myWithdrawals()`（钱包页「最近提现」显示状态）、`queryWithdraw` 返回 `package_info`
+  以支持「去确认」（待确认收款时重新拉起 `wx.requestMerchantTransfer`）。
+- `xyyx-pay.syncWithdrawals()` 由 `xyyx-cron` 每轮调用：确认页超时/客户端崩了也能把余额退回。
+- 后台「提现记录」升级：状态徽章、失败原因、在途/成功/失败统计、**一键同步在途状态**、
+  失败单 **一键重发**（`xyyx-admin.reissueWithdraw` → `xyyx-pay.reissueWithdraw`）。
+- 注：`reissueWithdraw` 需要用户余额足以重新扣款；微信「用户确认」模式下重发后仍需骑手在小程序里确认收款。
+
+---
+
 ## 2026-11-14 · v1.10.0（提现接微信「商家转账到零钱」）
 
 - 提现从「只记账」升级为**真实打款**：`xyyx-pay.requestWithdraw` 扣余额后调用
@@ -23,6 +60,29 @@
 - 旧客户端的 `xyyx-rider.requestWithdraw` 只返回「请更新小程序」，避免老包里重复扣钱。
 - 转账失败提示会带上**云函数出口 IP**（`api.ipify.org` 探测），方便把 IP 加到
   商户平台「商家转账 → 接口安全IP」白名单。
+
+---
+
+## 2026-11-13 夜 · v1.10.2（修「小图能看、大图全黑」）
+
+- 根因：`appendFileSync(path, base64, 'base64')` 在微信里对 base64 解码不可靠，多片拼接出来的文件是坏的
+  —— 单片（小图）用 `writeFileSync` 没问题，多片（大图）就黑屏 + 「原图显示失败」。
+- 改为：分片取回后拼 base64、最后 `writeFileSync` 一次写入，并 `statSync` 校验文件大小；
+  写失败再退一步 `base64ToArrayBuffer` 写。
+- 预览页失败时会显示具体原因（而不是只有一句「原图加载失败」），点提示可重试。
+- 图片引用同时支持 `cloud://` 和 `https://`（不同服务空间返回格式不同）。
+- 版本号 1.10.2。
+
+---
+
+## 2026-11-13 夜 · v1.10.1（输入框高度自算 + 服务端取图加固）
+
+- **输入框**：彻底不用 textarea 的 `auto-height`（微信原生会忽略 CSS 高度按 150px 渲染），
+  改成按内容自己算行高（1~3 行，44rpx/行），外层 view 固定 84rpx 与「＋」「发送」对齐。
+- **大图读取失败**：云函数取图加固 —— 先 `uniCloud.downloadFile` 直接取，失败再换临时链接
+  （兼容返回字段 `tempFileURL`/`url`，dataType 依次试 `buffer`/`arraybuffer`），
+  并用文件头校验是不是真图片；下载到错误内容时返回明确错误，不再丢给 `<image>` 白屏。
+- 版本号 1.10.1。
 
 ---
 

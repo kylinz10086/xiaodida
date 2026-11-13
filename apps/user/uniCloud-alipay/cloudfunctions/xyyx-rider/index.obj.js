@@ -479,7 +479,7 @@ const api = {
     const auth = await C.requireAuth(this)
     await C.checkNonce(auth, data.nonce, data.timestamp)
     await C.rateLimit(auth, 'upload', 30, 10 * 60 * 1000)
-    return C.ok(await C.uploadImageBase64(data.base64, { ext: data.ext, dir: data.dir }), '上传成功')
+    return C.ok(await C.uploadImageBase64(data.base64, { ext: data.ext, dir: data.dir, uid: auth.uid }), '上传成功')
   },
 
   /**

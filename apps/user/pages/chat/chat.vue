@@ -61,8 +61,9 @@
 			<view class="input-row">
 				<view class="img-btn" @click="pickImage">＋</view>
 				<view class="input-box">
-					<textarea class="input" v-model="draft" auto-height :maxlength="300" :show-confirm-bar="false"
-						confirm-type="send" :cursor-spacing="24" placeholder="说点什么…" @confirm="send"></textarea>
+					<textarea class="input" v-model="draft" :style="{ height: inputHeight }" :maxlength="300"
+						:show-confirm-bar="false" confirm-type="send" :cursor-spacing="24" placeholder="说点什么…"
+						@confirm="send" @input="onDraftInput"></textarea>
 				</view>
 				<view class="send-btn" :class="{ disabled: !canSend }" @click="send">发送</view>
 			</view>
@@ -79,7 +80,7 @@
 	 */
 	const QUICK = ['我快到了', '放门口就行', '在楼下等你', '稍等一下']
 
-	import { uploadImage, getTempUrls, thumbDataUri, fetchImageToTempFile } from '@/common/image.js'
+	import { uploadImage, thumbDataUri, resolveImageSrc } from '@/common/image.js'
 
 	function pad(n) {
 		return n < 10 ? '0' + n : '' + n
@@ -111,10 +112,19 @@
 				anchor: '',
 				timer: null,
 				imgMap: {},
+				multi: 1,
 				quickReplies: QUICK
 			}
 		},
 		computed: {
+			/**
+			 * 输入框高度自己算，不用 textarea 的 auto-height。
+			 * 微信原生 textarea 的 auto-height 会忽略 CSS 高度、按默认 150px 渲染，
+			 * 这就是「框比按钮高一截」的根因；改成固定行高 × 行数后高度完全可控。
+			 */
+			inputHeight() {
+				return 44 * this.multi + 'rpx'
+			},
 			canSend() {
 				return !!this.draft.trim() && !this.sending
 			},
@@ -244,38 +254,49 @@
 				const url = this.imgMap[m.content]
 				return displayable(url) ? url : ''
 			},
-			/** 把聊天里没有缩略图的老图片补上：先试临时链接，失败再让云函数分片取原图 */
+			/** 把聊天里没有缩略图的老图片补上：直读 data URI 优先，失败再落盘、最后临时链接 */
 			async resolveImages() {
 				const ids = Array.from(new Set(this.messages
 					.filter((m) => m.type === 'image' && typeof m.content === 'string' && m.content.indexOf('cloud://') === 0)
 					.map((m) => m.content)
 					.filter((id) => !displayable(this.imgMap[id]))))
 				if (!ids.length) return
-				const map = await getTempUrls(ids)
-				if (Object.keys(map).length) {
-					this.imgMap = Object.assign({}, this.imgMap, map)
-				}
-				// 临时链接拿不到（域名没配 / 链接过期）→ 云函数取原图，落成本地临时文件再画
-				const missing = ids.filter((id) => !displayable(this.imgMap[id]))
-				for (const id of missing.slice(0, 2)) {
+				// 一次最多补 3 张，别把聊天页拖慢
+				for (const id of ids.slice(0, 3)) {
+					let r = { src: '', errors: [] }
 					try {
-						const local = await fetchImageToTempFile(this.role, id)
-						if (local) {
-							this.imgMap = Object.assign({}, this.imgMap, { [id]: local })
-							this.messages.forEach((m) => {
-								if (m.type === 'image' && m.content === id) m._imgFailed = false
-							})
-						}
+						r = await resolveImageSrc(this.role, id)
 					} catch (e) {
+						r.errors = [(e && e.message) || '图片读取失败']
+					}
+					if (r.src) {
+						this.imgMap = Object.assign({}, this.imgMap, { [id]: r.src })
+						this.messages.forEach((m) => {
+							if (m.type === 'image' && m.content === id) {
+								m._imgFailed = false
+								m._imgErr = ''
+							}
+						})
+					} else {
 						// 标记失败，气泡上给「点开重试」；单张失败不影响其它消息
 						this.messages.forEach((m) => {
-							if (m.type === 'image' && m.content === id) m._imgFailed = true
+							if (m.type === 'image' && m.content === id) {
+								m._imgFailed = true
+								m._imgErr = (r.errors || []).join('；')
+							}
 						})
 					}
 				}
 			},
 			useQuick(q) {
 				this.draft = q
+				this.multi = 1
+			},
+			/** 输入时按内容算行数（最多 3 行），高度随行数变，不再靠原生 auto-height */
+			onDraftInput(e) {
+				const val = (e && e.detail && e.detail.value) != null ? String(e.detail.value) : this.draft
+				const lines = Math.max(1, val.split('\n').length, Math.ceil(val.length / 18))
+				this.multi = Math.min(3, lines)
 			},
 			send() {
 				this.pushAndSend(this.draft.trim(), 'text')
@@ -293,8 +314,8 @@
 						try {
 							// 先做一张内嵌缩略图：上屏/对方展示都不依赖云存储域名
 							const thumb = await thumbDataUri(path, { width: 480, maxLen: 12000 })
-							// 原图传得更清楚一点（1440 宽），点开预览时用
-							const fileID = await uploadImage(path, { role: this.role, dir: 'chat', width: 1440, quality: 70 })
+							// 原图传得更清楚一点（1280 宽），点开预览时用
+							const fileID = await uploadImage(path, { role: this.role, dir: 'chat', width: 1280, quality: 65 })
 							uni.hideLoading()
 							this.pushAndSend(fileID, 'image', thumb)
 						} catch (e) {
@@ -307,7 +328,10 @@
 			async pushAndSend(content, type, thumb) {
 				if (!content || this.sending) return
 				this.sending = true
-				if (type === 'text') this.draft = ''
+				if (type === 'text') {
+					this.draft = ''
+					this.multi = 1
+				}
 				const tempId = 'tmp_' + Date.now()
 				const now = Date.now()
 				// 先上屏，弱网下也有反馈
@@ -368,10 +392,9 @@
 					const src = this.bubbleSrc(msg) || (displayable(msg.thumb) ? msg.thumb : '')
 					if (!src) return
 					if (msg === m) current = list.length
-					list.push({
-						src,
-						fileID: typeof msg.content === 'string' && msg.content.indexOf('cloud://') === 0 ? msg.content : ''
-					})
+					const content = typeof msg.content === 'string' ? msg.content : ''
+					const isRef = /^cloud:\/\//.test(content) || /^https?:\/\//.test(content)
+					list.push({ src, fileID: isRef ? content : '' })
 				})
 				if (!list.length) {
 					uni.showToast({ title: '这张图暂时打不开', icon: 'none' })

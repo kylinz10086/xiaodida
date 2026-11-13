@@ -149,6 +149,26 @@ async function cleanNonces() {
   }
 }
 
+/**
+ * 同步在途提现的真实状态。
+ * 用户点了「确认收款」但客户端崩了、或者支付宝/微信回调没到，
+ * 都靠这里查到最终状态：失败/过期就把钱退回余额，不会出现「扣了钱没到账」。
+ */
+async function syncWithdrawals() {
+  const pay = uniCloud.importObject('xyyx-pay', { customUI: true })
+  const res = await pay.syncWithdrawals()
+  return (res && res.data) || {}
+}
+
+/** 清理很久没人看的直存图片 */
+async function cleanImages() {
+  try {
+    return await C.cleanImageData(120)
+  } catch (e) {
+    return 0
+  }
+}
+
 exports.main = async () => {
   const started = Date.now()
   // 定时任务不走云对象的 guard，这里自己刷一次配置
@@ -181,6 +201,20 @@ exports.main = async () => {
 
   const removed = await cleanNonces()
 
+  let wdResult = {}
+  try {
+    wdResult = await syncWithdrawals()
+  } catch (e) {
+    console.error('[xyyx-cron] 同步提现状态失败:', e && e.message)
+  }
+
+  let imagesRemoved = 0
+  try {
+    imagesRemoved = await cleanImages()
+  } catch (e) {
+    console.error('[xyyx-cron] 清理图片缓存失败:', e && e.message)
+  }
+
   const summary = {
     ok: !confirmError && !refundError,
     scan: confirmResult ? confirmResult.scanned : 0,
@@ -191,6 +225,9 @@ exports.main = async () => {
     refund_failed: refundResult ? refundResult.failed : [],
     orphan_repaired: orphanResult ? orphanResult.repaired : 0,
     nonces_removed: removed,
+    withdraw_checked: wdResult.scanned || 0,
+    withdraw_updated: wdResult.updated || 0,
+    images_removed: imagesRemoved,
     cost_ms: Date.now() - started
   }
   console.log('[xyyx-cron]', JSON.stringify(summary))

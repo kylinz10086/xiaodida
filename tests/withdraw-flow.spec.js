@@ -11,6 +11,9 @@
 
 const { createEnv } = require('./fake-uni')
 
+// 1.11.0 起提现走微信「商家转账」，离线测试用 mock 转账（不联网，但提现单/扣款/冲正照常跑）
+process.env.XYYX_WITHDRAW_MOCK = 'success'
+
 let passed = 0
 const failures = []
 
@@ -67,7 +70,8 @@ async function main() {
   console.log('\n[3] 正常提现：余额扣减、累计已提现、流水，不再冻结')
   const res = await call(payObj.requestWithdraw, { amount: 3, ...meta() })
   eq(res.code, 0, '提现成功: ' + res.msg)
-  eq(res.data.state || '', '', '转账请求已发出')
+  eq(res.data.state, 'SUCCESS', '微信转账状态 SUCCESS')
+  eq(res.data.need_confirm, false, '免确认模式不需要再点确认')
   eq(res.data.balance, 997, '返回剩余余额 997 元')
   const wallet = get('xyyx-wallets', 'rider-1')
   eq(wallet.balance_cent, 99700, '余额扣了 3 元')
@@ -77,6 +81,19 @@ async function main() {
   const wd = txs.find((t) => t.type === 'withdraw' && t.amount_cent === -300)
   ok(!!wd, '写了一条 -3 元的 withdraw 流水')
   eq(wd.remark, '提现到微信零钱（商家转账）', '流水备注说明走的商家转账')
+
+  // 提现单落库：一笔提现一条记录，后台可核查
+  const wdDoc = coll('xyyx-withdrawals').get(res.data.out_bill_no)
+  ok(!!wdDoc, '生成了提现单')
+  eq(wdDoc && wdDoc.state, 'SUCCESS', '提现单状态 SUCCESS')
+  eq(wdDoc && wdDoc.amount_cent, 300, '提现单金额 3 元')
+  eq(wdDoc && wdDoc.rolled_back, false, '成功的不冲正')
+
+  console.log('\n[3b] 我的提现记录')
+  const mine = await call(payObj.myWithdrawals, 5)
+  eq(mine.code, 0, '查询成功')
+  eq((mine.data.list || []).length, 1, '返回 1 条提现记录')
+  eq(mine.data.list[0].state_text, '已到账', '状态文案正确')
 
   console.log('\n[4] 冷却：刚提过不能马上再提')
   const again = await call(payObj.requestWithdraw, { amount: 3, ...meta() })
@@ -128,6 +145,36 @@ async function main() {
   w3.balance_cent = 100
   const noMoney = await call(payObj.requestWithdraw, { amount: 3, ...meta() })
   eq(noMoney.code, 400, '余额不足被拒')
+
+  console.log('\n[8] 转账失败：自动冲正，且只退一次')
+  const w3b = get('xyyx-wallets', 'rider-1')
+  w3b.balance_cent = 5000
+  w3b.withdrawn_cent = 0
+  // 绕开冷却：把已有提现流水挪到 11 分钟前
+  for (const tx of coll('xyyx-transactions').values()) {
+    if (tx.type === 'withdraw') tx.create_time = Date.now() - MIN - 5000
+  }
+  process.env.XYYX_WITHDRAW_MOCK = 'fail'
+  const failRes = await call(payObj.requestWithdraw, { amount: 4, ...meta() })
+  eq(failRes.code, 400, '转账失败返回 400')
+  const w4 = get('xyyx-wallets', 'rider-1')
+  eq(w4.balance_cent, 5000, '失败后余额原样退回')
+  eq(w4.withdrawn_cent, 0, '累计已提现也退回')
+  const wdDocs = Array.from(coll('xyyx-withdrawals').values())
+  const failDoc = wdDocs.find((d) => d.state === 'FAIL')
+  ok(!!failDoc, '提现单标记 FAIL')
+  eq(failDoc && failDoc.rolled_back, true, '提现单标记已冲正')
+  ok(
+    Array.from(coll('xyyx-transactions').values()).some(
+      (t) => t.type === 'withdraw' && t.amount_cent === 400 && /失败退回/.test(t.remark || '')
+    ),
+    '补了一条退回流水'
+  )
+
+  // 定时任务再同步一次，不能重复加钱
+  process.env.XYYX_WITHDRAW_MOCK = 'success'
+  await call(payObj.syncWithdrawals)
+  eq(get('xyyx-wallets', 'rider-1').balance_cent, 5000, '同步后余额没有被重复加钱')
 
   console.log('\n-----------------------------')
   console.log('passed ' + passed + ', failed ' + failures.length)

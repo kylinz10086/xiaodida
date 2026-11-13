@@ -3,6 +3,9 @@
 		<swiper class="pv-swiper" :current="current" @change="onChange" :circular="false">
 			<swiper-item v-for="(it, i) in list" :key="i" class="pv-item">
 				<image class="pv-img" :src="srcOf(it)" mode="aspectFit" @click.stop="close" @error="onImgError(it)"></image>
+				<view class="pv-loading" v-if="it.fileID && loading[it.fileID]">
+					<text>原图加载中…</text>
+				</view>
 			</swiper-item>
 		</swiper>
 
@@ -19,12 +22,13 @@
 	 * 自建图片预览页
 	 *
 	 * 为什么不用 uni.previewImage：它加载本地文件/data URI 时会一直转圈（不同基础库表现还不一样），
-	 * 而 <image> 是确定能画的。这里用 swiper + image 自己做全屏预览：
-	 *   - 先用缩略图/本地文件秒开，再在后台用云函数分片把原图取回来替换（不阻塞、不转圈）；
-	 *   - 左右滑动看同组所有图片；
-	 *   - 原图取不到就一直显示缩略图，不会白屏。
+	 * 而 <image> 是确定能画的。
+	 *
+	 * 1.11.0 换成「多路径兜底」：一条路失败就自动换下一条，并把每条路失败的原因显示在底部。
+	 *   直读(data URI)  → 落盘(本地临时文件) → 临时链接(云存储 URL)
+	 * 先画缩略图秒开，原图回来再替换；三条都不行就一直显示缩略图，不会白屏。
 	 */
-	import { fetchImageToTempFile, getTempUrls } from '@/common/image.js'
+	import { resolveImageSrc, forgetImageSrc } from '@/common/image.js'
 
 	export default {
 		data() {
@@ -34,14 +38,24 @@
 				role: 'user',
 				full: {},
 				loading: {},
+				// 某个 fileID 上「已经失败过的方式」，重试时跳过它
 				failed: {},
+				method: {},
 				err: ''
 			}
 		},
 		computed: {
 			tipText() {
 				if (this.err) return this.err + '，点此重试'
+				const k = this.curKey
+				if (k && this.method[k] === 'data') return '原图 · 直读'
+				if (k && this.method[k] === 'file') return '原图 · 本地文件'
+				if (k && this.method[k] === 'url') return '原图 · 临时链接'
 				return '左右滑动 · 点图片关闭'
+			},
+			curKey() {
+				const it = this.list[this.current]
+				return (it && it.fileID) || ''
 			}
 		},
 		onLoad() {
@@ -55,7 +69,7 @@
 		methods: {
 			srcOf(it) {
 				if (!it) return ''
-				if (it.fileID && this.full[it.fileID] && !this.failed[it.fileID]) return this.full[it.fileID]
+				if (it.fileID && this.full[it.fileID]) return this.full[it.fileID]
 				return it.src || ''
 			},
 			onChange(e) {
@@ -63,43 +77,45 @@
 				this.err = ''
 				this.loadFull(this.current)
 			},
+			/** <image> 画不出来：把这条路径记成失败，自动换下一条 */
 			onImgError(it) {
-				// 原图加载失败就退回缩略图，并把原因显示出来（方便现场判断）
-				if (it && it.fileID) {
-					this.$set(this.failed, it.fileID, true)
-					this.err = '原图显示失败'
-				}
+				if (!it || !it.fileID) return
+				const used = this.method[it.fileID]
+				if (used) this.$set(this.failed, it.fileID, used)
+				this.$delete(this.full, it.fileID)
+				this.$set(this.loading, it.fileID, false)
+				this.err = '原图显示失败'
+				this.loadFull(this.current)
 			},
 			async loadFull(i) {
 				const it = this.list[i]
-				if (!it || !it.fileID || this.full[it.fileID] || this.loading[it.fileID]) return
+				if (!it || !it.fileID) return
+				if (this.full[it.fileID] || this.loading[it.fileID]) return
+				const skip = {}
+				if (this.failed[it.fileID]) skip[this.failed[it.fileID]] = true
 				this.$set(this.loading, it.fileID, true)
+				let r = { src: '', method: '', errors: [] }
 				try {
-					const local = await fetchImageToTempFile(this.role, it.fileID)
-					if (local) {
-						this.$set(this.full, it.fileID, local)
-						this.err = ''
-					} else {
-						// 云函数取不到时，退回云存储临时链接（如果小程序域名白名单配过，这条也能用）
-						const map = await getTempUrls([it.fileID])
-						if (map[it.fileID]) {
-							this.$set(this.full, it.fileID, map[it.fileID])
-							this.err = ''
-						} else {
-							this.err = '原图加载失败'
-						}
-					}
+					r = await resolveImageSrc(this.role, it.fileID, { skip })
 				} catch (e) {
-					this.err = (e && e.message) || '原图加载失败'
-				} finally {
-					this.$set(this.loading, it.fileID, false)
+					r.errors = [(e && e.message) || '图片加载失败']
 				}
+				this.$set(this.loading, it.fileID, false)
+				if (r.src) {
+					this.$set(this.full, it.fileID, r.src)
+					this.$set(this.method, it.fileID, r.method)
+					this.err = ''
+					return
+				}
+				this.err = (r.errors || []).join('；') || '原图加载失败'
 			},
 			retry() {
 				const it = this.list[this.current]
 				if (!it || !it.fileID) return
+				forgetImageSrc(it.fileID)
 				this.$delete(this.full, it.fileID)
-				this.$set(this.failed, it.fileID, false)
+				this.$delete(this.failed, it.fileID)
+				this.$delete(this.method, it.fileID)
 				this.err = ''
 				this.loadFull(this.current)
 			},
@@ -128,6 +144,7 @@
 	}
 
 	.pv-item {
+		position: relative;
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -136,6 +153,16 @@
 	.pv-img {
 		width: 100vw;
 		height: 100vh;
+	}
+
+	.pv-loading {
+		position: absolute;
+		left: 0;
+		right: 0;
+		bottom: 130rpx;
+		text-align: center;
+		color: rgba(255, 255, 255, 0.5);
+		font-size: 22rpx;
 	}
 
 	.pv-close {
@@ -175,5 +202,7 @@
 		margin-top: 10rpx;
 		color: rgba(255, 255, 255, 0.6);
 		font-size: 21rpx;
+		text-align: center;
+		padding: 0 40rpx;
 	}
 </style>
