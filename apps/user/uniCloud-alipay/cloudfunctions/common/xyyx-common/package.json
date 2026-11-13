@@ -1,0 +1,9 @@
+{
+  "name": "xyyx-common",
+  "version": "1.0.0",
+  "description": "校递达后端公共模块",
+  "main": "index.js",
+  "dependencies": {
+    "uni-id-common": "file:../uni-id-common"
+  }
+}

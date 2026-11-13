@@ -1,0 +1,9 @@
+{
+  "name": "xyyx-admin",
+  "version": "1.0.0",
+  "description": "校递达管理后台云对象",
+  "main": "index.obj.js",
+  "dependencies": {
+    "xyyx-common": "file:../common/xyyx-common"
+  }
+}

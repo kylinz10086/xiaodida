@@ -1,0 +1,13 @@
+{
+  "bsonType": "object",
+  "required": ["key"],
+  "permission": { "read": false, "create": false, "update": false, "delete": false },
+  "description": "防重放 nonce。key 唯一，重复提交会因唯一索引冲突被拒。",
+  "properties": {
+    "_id": {},
+    "key": { "bsonType": "string", "description": "uid + nonce" },
+    "uid": { "bsonType": "string" },
+    "create_time": { "bsonType": "timestamp" },
+    "expire_time": { "bsonType": "timestamp", "description": "过期后可清理" }
+  }
+}

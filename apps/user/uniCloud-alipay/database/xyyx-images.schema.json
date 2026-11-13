@@ -1,0 +1,16 @@
+{
+  "bsonType": "object",
+  "required": ["file_id", "b64"],
+  "permission": { "read": false, "create": false, "update": false, "delete": false },
+  "description": "图片字节直存。上传时顺手把压缩后的图 base64 存一份（_id = i_ + md5(fileID)），客户端看图直接从数据库分片取，不依赖云存储读取、CDN 域名白名单和本地文件系统。cron 会清理超过 120 天的记录。",
+  "properties": {
+    "_id": { "description": "i_ + md5(文件ID) 前 28 位" },
+    "file_id": { "bsonType": "string", "description": "云存储 fileID（cloud:// 或 https 链接）" },
+    "b64": { "bsonType": "string", "description": "图片 base64（不超过 620KB，超过不进库，改走云存储兜底）" },
+    "mime": { "bsonType": "string", "description": "image/jpeg 等" },
+    "size": { "bsonType": "int", "minimum": 0, "description": "解码后的字节数" },
+    "user_id": { "bsonType": "string", "description": "上传者" },
+    "create_time": { "bsonType": "timestamp" },
+    "update_time": { "bsonType": "timestamp" }
+  }
+}

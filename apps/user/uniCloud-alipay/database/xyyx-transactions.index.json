@@ -1,0 +1,22 @@
+{
+  "indexes": [
+    {
+      "IndexName": "idempotency_key_unique",
+      "MgoKeySchema": { "MgoIndexKeys": [{ "Name": "idempotency_key", "Direction": "1" }], "MgoIsUnique": true }
+    },
+    {
+      "IndexName": "user_id_create_time",
+      "MgoKeySchema": {
+        "MgoIndexKeys": [
+          { "Name": "user_id", "Direction": "1" },
+          { "Name": "create_time", "Direction": "-1" }
+        ],
+        "MgoIsUnique": false
+      }
+    },
+    {
+      "IndexName": "task_id",
+      "MgoKeySchema": { "MgoIndexKeys": [{ "Name": "task_id", "Direction": "1" }], "MgoIsUnique": false }
+    }
+  ]
+}
