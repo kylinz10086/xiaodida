@@ -115,13 +115,6 @@
 					<text class="arrow">›</text>
 				</view>
 			</view>
-			<view class="menu-item" @click="goSupport">
-				<text class="menu-label">联系客服</text>
-				<view class="menu-right">
-					<text class="menu-value">订单问题、投诉</text>
-					<text class="arrow">›</text>
-				</view>
-			</view>
 		</view>
 		
 		<view class="menu-section" v-if="loggedIn">
@@ -302,27 +295,8 @@ export default {
 			uni.navigateTo({ url: '/pages/chat/list?role=user' })
 		},
 		goSupport() {
-			const p = this.$store.state.profile || {}
-			const mobile = (p.settings && p.settings.supportMobile) || ''
-			if (mobile) {
-				uni.showModal({
-					title: '联系客服',
-					content: '客服电话：' + mobile + '\n工作时间 9:00-21:00',
-					confirmText: '拨打',
-					success: (r) => {
-						if (r.confirm) uni.makePhoneCall({ phoneNumber: String(mobile), fail: () => {} })
-					}
-				})
-				return
-			}
-			uni.showModal({
-				title: '联系客服',
-				content: '客服在线时间 9:00-21:00。你可以先在「意见反馈」里留言，我们会尽快回复。',
-				confirmText: '去反馈',
-				success: (r) => {
-					if (r.confirm) uni.navigateTo({ url: '/pages/xyyx/feedback/feedback' })
-				}
-			})
+			// 目前没有人工客服，入口已从「我的」移除；这里保留兜底，避免旧入口/深链报错
+			uni.navigateTo({ url: '/pages/xyyx/feedback/feedback' })
 		},
 		async loadChatUnread() {
 			try {

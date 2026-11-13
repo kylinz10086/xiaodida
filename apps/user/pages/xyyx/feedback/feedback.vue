@@ -104,7 +104,7 @@
 				if (!this.isDelete) return doSubmit()
 				uni.showModal({
 					title: '确认提交注销申请？',
-					content: '提交后账号资料会在 15 个工作日内删除，期间可以联系客服撤回。',
+					content: '提交后账号资料会在 15 个工作日内删除，期间可以在「意见反馈」里撤回。',
 					confirmText: '提交',
 					confirmColor: '#FF3B30',
 					success: (r) => {

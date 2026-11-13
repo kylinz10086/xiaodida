@@ -12,7 +12,7 @@
 
 		<view class="alg-foot">
 			<text class="alg-tip">生效日期：2026 年 11 月 11 日</text>
-			<text class="alg-tip">如对排序或撮合结果有疑问，可通过「我的-联系客服」反馈，我们会在 15 个工作日内答复。</text>
+			<text class="alg-tip">如对排序或撮合结果有疑问，可通过「我的-意见反馈」反馈，我们会在 15 个工作日内答复。</text>
 		</view>
 	</view>
 </template>

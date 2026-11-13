@@ -208,7 +208,7 @@
 			<!-- 退款失败要说清原因，否则用户只看到「退款失败」四个字 -->
 			<view class="refund-fail" v-if="taskData.refundStatus === 'failed' && taskData.refundFailReason">
 				<text>退款失败：{{taskData.refundFailReason}}</text>
-				<text class="refund-fail-tip">系统会自动重试，也可以联系客服人工处理</text>
+				<text class="refund-fail-tip">系统会自动重试，也可以在「我的-意见反馈」里说明情况</text>
 			</view>
 		</view>
 
