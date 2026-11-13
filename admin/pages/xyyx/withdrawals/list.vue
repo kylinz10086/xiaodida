@@ -20,6 +20,8 @@
 					失败的单子确认余额已退回后，可以在这里点「重发」再来一次。
 					如果失败原因写「此IP地址不允许调用接口」，点右上角「查出口IP」，把查到的 IP 全部加到
 					微信商户平台 → 产品中心 → 商家转账 → 接口安全IP。
+					注意：云函数出口 IP 会变。想一劳永逸，用 tools/wechat-relay.cjs 在固定 IP 的服务器上做转发，
+					之后微信只看到那台机器的 IP，白名单配一次就长期有效。
 				</text>
 			</view>
 
@@ -72,6 +74,7 @@
 					</uni-td>
 					<uni-td align="center">
 						<text class="reason">{{ item.fail_reason || '-' }}</text>
+						<text class="ip" v-if="item.egress_ip">IP {{ item.egress_ip }}</text>
 					</uni-td>
 					<uni-td align="center">
 						<button v-if="item.can_retry" class="uni-button" type="warn" size="mini"
@@ -278,6 +281,13 @@
 	.amount { color: #eb5757; font-weight: 600; }
 	.mono { font-family: Consolas, monospace; font-size: 12px; color: #666; }
 	.reason { font-size: 12px; color: #eb5757; }
+	.ip {
+		display: block;
+		margin-top: 2px;
+		font-family: Consolas, monospace;
+		font-size: 11px;
+		color: #999;
+	}
 	.muted { color: #bbb; }
 
 	.badge {

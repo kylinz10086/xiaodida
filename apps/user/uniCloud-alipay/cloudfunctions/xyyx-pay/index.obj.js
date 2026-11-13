@@ -53,16 +53,50 @@ function buildAuthorization(method, urlPath, body) {
   return `WECHATPAY2-SHA256-RSA2048 mchid="${PAY_CONFIG.mchid}",nonce_str="${nonceStr}",signature="${signature}",timestamp="${timestamp}",serial_no="${PAY_CONFIG.serialNo}"`
 }
 
+/**
+ * 调微信支付 V3。
+ *
+ * 默认直连 api.mch.weixin.qq.com；如果 pay-config.js 里配了 relay，
+ * 就先发到「固定 IP 转发器」（tools/wechat-relay.cjs），由它转发。
+ * 为什么需要：云函数公网出口是 NAT 池，IP 会变，而商家转账必须配「接口安全IP」白名单；
+ * 走固定 IP 的转发机之后，微信看到的出口 IP 就不会再变。
+ */
 async function wxRequest(method, urlPath, bodyObj) {
   const body = bodyObj ? JSON.stringify(bodyObj) : ''
+  const headers = {
+    Authorization: buildAuthorization(method, urlPath, body),
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+    'User-Agent': 'xiaodida-pay/1.0'
+  }
+
+  const relay = PAY_CONFIG.relay || null
+  if (relay && relay.url) {
+    const ts = String(Date.now())
+    const sign = crypto
+      .createHmac('sha256', String(relay.secret || ''))
+      .update(ts + '\n' + urlPath + '\n' + body)
+      .digest('hex')
+    const res = await uniCloud.httpclient.request(relay.url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-relay-ts': ts,
+        'x-relay-sign': sign,
+        'x-relay-path': encodeURIComponent(urlPath),
+        'x-relay-method': method
+      },
+      content: JSON.stringify({ path: urlPath, method, headers, body }),
+      dataType: 'json',
+      timeout: 20000
+    })
+    const d = (res && res.data) || {}
+    return { status: Number(d.status) || (res && res.status) || 0, data: d.data || {} }
+  }
+
   const res = await uniCloud.httpclient.request(WX_API + urlPath, {
     method,
-    headers: {
-      Authorization: buildAuthorization(method, urlPath, body),
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      'User-Agent': 'xiaodida-pay/1.0'
-    },
+    headers,
     content: body,
     dataType: 'json',
     timeout: 15000
@@ -534,8 +568,9 @@ async function issueTransfer({ uid, amountCent, outBillNo, openid, source }) {
   try {
     r = await wxTransfer(transferBody({ openid, amountCent, outBillNo }))
   } catch (e) {
-    await applyTransferState(doc, { state: 'FAIL', fail_reason: '网络异常' }, 0)
     const ip = await egressIp()
+    await wdPatch(outBillNo, { egress_ip: ip })
+    await applyTransferState(doc, { state: 'FAIL', fail_reason: '网络异常' }, 0)
     const err = new C.BizError(500, `微信转账请求失败${ip ? '（出口IP ' + ip + '）' : ''}，金额已退回，请稍后再试`)
     err.outBillNo = outBillNo
     throw err
@@ -546,6 +581,8 @@ async function issueTransfer({ uid, amountCent, outBillNo, openid, source }) {
   const okState = state !== 'FAIL' && state !== 'CANCELLED' && state !== 'EXPIRED'
   if (!okState) {
     const ip = await egressIp()
+    // 记下这次用的出口 IP：后台能直接看到「该加白名单的是哪个 IP」
+    await wdPatch(outBillNo, { egress_ip: ip })
     const reason = d.message || d.fail_reason || `HTTP ${r.status}`
     const err = new C.BizError(
       400,

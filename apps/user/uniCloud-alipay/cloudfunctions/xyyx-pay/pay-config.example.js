@@ -18,5 +18,15 @@ module.exports = {
   apiV3Key: '',           // APIv3 密钥（32 位）
   platformSerial: '',     // 微信支付平台证书序列号
   platformPublicKey: '',  // 微信支付平台证书公钥（PEM）
-  notifyUrl: ''           // 支付结果回调地址
+  notifyUrl: '',          // 支付结果回调地址
+
+  // 可选：固定出口 IP 转发器（tools/wechat-relay.cjs）
+  //
+  // 云函数的公网出口是 NAT 池，IP 会变，而商家转账要求「接口安全IP」白名单 ——
+  // 配了这个之后，所有微信支付请求都先发到你自己那台**固定 IP** 的机器，
+  // 由它转发给微信；微信看到的永远是这台机器的 IP，就不会再变。
+  //
+  // relay: { url: 'https://你的域名/forward', secret: '一串随机字符串' }
+  relay: null
 }
+
