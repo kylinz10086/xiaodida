@@ -103,8 +103,62 @@ xyyx-admin.overview()
 
 ## 6. 安全边界
 
-- 管理后台只监听 `127.0.0.1:5180`，不对外网开放；
+- 本地版只监听 `127.0.0.1:5180`；公网版走 uniCloud 前端网页托管（见第 7 节），是**可公网访问的登录页**，务必用强密码；
 - `xyyx-admin` 所有方法先 `requireAdmin`；
 - 审核写操作只允许 `approve` / `reject`，不接收任意字段；
 - 不返回密码、token、支付密钥；
 - `apps/user/.../uni-id/config.json` 含 AppSecret/pepper，已在 `.gitignore`。
+
+---
+
+## 7. 部署到公网（uniCloud 前端网页托管）
+
+> 场景：电脑关机、或者人在外面，手机浏览器也要能开后台审核骑手 / 查用户。
+> 默认域名（2026-11-14 实测）：`https://env-00jy72ju8b4z-static.normal.cloudstatic.cn/admin/`
+
+### 7.1 一条命令部署（2026-11-14 实测通过）
+
+```powershell
+$cli = "F:\HBuilderX.5.05.2026032417\HBuilderX\cli.exe"
+$node = "F:\deepseek\harness\dsh-home\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
+
+# 出 H5 + 传到前端网页托管（只传产物，258 个文件）
+& $cli publish web --webHosting true --project F:\xiaodida\admin --provider alipay `
+    --spaceId env-00jy72ju8b4z --webTitle "校递达管理"
+
+# 本地 5180 还要能开：重新打一次代理补丁（上一步会覆盖 dist/build/web）
+& $node tools\patch-admin-cloud.cjs
+```
+
+- 这条命令会按 `manifest.json` 的 h5 基础路径（`/admin/`）上传，文件落在托管根目录下的 `admin/`；
+- 结束时会打印访问地址；源码不会被传上去。
+
+### 7.2 控制台方式（备用）
+
+<https://unicloud.dcloud.net.cn> → 空间 `env-00jy72ju8b4z` → 前端网页托管 → 进 `/admin` 目录 → 上传文件夹，
+选 `admin\unpackage\dist\build\web-public`，**不要**勾「包含上传文件夹的根目录」。
+
+`web-public` 用下面这条生成（它 = 直连云函数的版本，静态托管没有 `/admin/cloud` 代理，必须直连）：
+
+```powershell
+& $cli publish --platform h5 --project F:\xiaodida\admin
+& $node tools\patch-admin-cloud.cjs    # 本地 5180 继续用代理版
+& $node tools\patch-admin-public.cjs   # 复制出 web-public：直连版 + 弹窗补丁
+```
+
+> ⚠️ **别用 `cli hosting deploy`**（HBuilderX 5.07 实测）：它会忽略 `--source` 把**整个项目**（源码、`uniCloud-alipay`、
+> `unpackage` 全在里面）传到云端；而且 `hosting delete` 删文件夹是空操作，只能一个文件一个文件删，清理成本很高。
+
+### 7.3 访问与跨域
+
+- 访问 `https://env-00jy72ju8b4z-static.normal.cloudstatic.cn/admin/`，用 `xyyxadmin` 登录；
+- 服务空间默认放行 `localhost` 和「前端网页托管默认域名」，不用额外配；
+- 如果绑了自定义域名，要去 uniCloud 控制台 → **跨域配置 → Web 安全域名** 加上新域名（支付宝云不支持 `*` 通配）。
+
+### 7.4 维护与收紧
+
+- 改了后台代码：重跑 7.1 那条命令即可（它自带编译+上传），然后再打本地代理补丁；
+- 页面更新后看不到新内容：控制台「刷新缓存」（支付宝云按文件/文件夹刷，约 10–30 分钟生效）；
+- 公网 = 谁都能打开登录页，务必给 `xyyxadmin` 换强密码，别把 URL 发群里；
+- 想再隐蔽：把 `admin/manifest.json` 的 h5 基础路径改成随机串（如 `/mgr-8f3c/`），重新出包传到同名目录，URL 就不可猜；
+- 不用时直接在控制台删掉 `/admin` 目录即可，本地 5180 不受影响。
