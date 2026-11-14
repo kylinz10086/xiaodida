@@ -61,9 +61,15 @@ if (-not $SkipSchema) {
     Write-Host "`n提醒：.index.json 无法通过 CLI 上传，去 uniCloud 控制台建索引（nonces.key 唯一、transactions.idempotency_key 唯一）" -ForegroundColor Yellow
 }
 
-# 2. 公共模块（必须早于云对象）
+# 2. 公共模块（必须早于云对象；被依赖的先传）
+#
+# 为什么要把 uni-config-center 也列进来：公共模块是在「上传云函数」那一刻被打包进函数的。
+# 改了 AppSecret / config.json 只传公共模块不够，必须重传一遍云函数才生效；
+# 反过来，漏传 uni-config-center 就重传函数，线上的 appsecret 还是旧的。
 if (-not $SkipCommon) {
-    Invoke-Cli @("cloud", "functions", "--upload", "common", "--prj", $Project, "--provider", $Provider, "--name", "xyyx-common")
+    foreach ($mod in @("uni-id-common", "uni-config-center", "uni-captcha", "uni-cloud-s2s", "uni-open-bridge-common", "xyyx-common")) {
+        Invoke-Cli @("cloud", "functions", "--upload", "common", "--prj", $Project, "--provider", $Provider, "--name", $mod)
+    }
 }
 
 # 3. 云对象

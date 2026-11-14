@@ -19,6 +19,24 @@
    （该文件已在 `.gitignore` 中，不会被提交）
 3. 重置后旧的 AppSecret 立即失效，历史泄露无危害
 
+**⚠️ 2026-11-14 仍未重置。** 现在的做法（一条命令，不要用 `setup-secrets.ps1`）：
+
+```powershell
+cd F:\xiaodida
+.\tools\scripts\rotate-appsecret.ps1 -AppSecret "重置后拿到的32位"
+.\tools\scripts\deploy-cloud.ps1 -SkipSchema
+```
+
+- `rotate-appsecret.ps1` **只改 appsecret 一个字段**，pepper / tokenSecret 原样保留，
+  并在写盘前回读校验（防止把密码哈希和登录态一起作废）。
+- `setup-secrets.ps1` 会重新生成 pepper + tokenSecret，等于把所有密码和登录态清零，
+  **不要**拿它来轮换 AppSecret。
+- 公共模块是在「上传云函数」时被打包进函数的，所以改完 `config.json` 必须重传一遍云函数；
+  `deploy-cloud.ps1` 已经按「先公共模块、再云函数」的顺序排好。
+- 重置到部署完成之间，小程序登录会全部失败（旧 secret 已失效、云端还是旧值）。
+  测试空间只有几个账号，2 分钟内完成即可。
+- 内容安全用的 access_token 也会读同一个 secret（代码已做回落），不需要在后台再填一遍。
+
 ### 🟠 2. 腾讯位置服务 Key 已泄露
 
 **事实**：地图 key `29f0...6085` 硬编码在 9 个 `.vue` 文件里。

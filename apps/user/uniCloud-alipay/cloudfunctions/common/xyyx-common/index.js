@@ -2349,6 +2349,24 @@ const CONTENT_MODE = { OFF: 'off', LOG: 'log', BLOCK: 'block' }
 /** access_token 进程内缓存（有效期 2 小时，提前 5 分钟过期） */
 const _wxToken = { value: '', expire: 0 }
 
+/**
+ * 从 uni-config-center 读 uni-id 配置里的某一项（点号路径）。
+ *
+ * 为什么要留这条兜底：AppSecret 只有一个，登录（uni-id-co）和内容安全都该用同一份。
+ * 后台设置里再填一遍的话，重置 AppSecret 时很容易只改一处 ——
+ * 表现是「登录正常，但内容安全一直跳过」，很难发现。所以优先读后台设置，
+ * 没填就回到 config.json。
+ */
+function configCenterValue(path) {
+  try {
+    const createConfig = require('uni-config-center')
+    const cfg = createConfig({ pluginId: 'uni-id' })
+    return String(cfg.config(path, '') || '')
+  } catch (e) {
+    return ''
+  }
+}
+
 /** 取用户的微信 openid（uni-id-co 存在 wx_openid 对象里，键名各版本不同） */
 async function wxOpenidOf(uid) {
   try {
@@ -2375,8 +2393,11 @@ async function wxAccessToken() {
   const now = Date.now()
   if (_wxToken.value && now < _wxToken.expire) return _wxToken.value
   const s = S()
-  const appid = String(s.wxAppid || '').trim()
-  const secret = String(s.wxAppSecret || '').trim()
+  // 先看后台设置（方便灰度期临时换 key），没有再回落到 uni-id/config.json
+  let appid = String(s.wxAppid || '').trim()
+  let secret = String(s.wxAppSecret || '').trim()
+  if (!appid) appid = configCenterValue('mp-weixin.oauth.weixin.appid')
+  if (!secret) secret = configCenterValue('mp-weixin.oauth.weixin.appsecret')
   if (!appid || !secret) return ''
   try {
     const url =

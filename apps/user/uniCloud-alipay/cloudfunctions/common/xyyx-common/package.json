@@ -4,6 +4,7 @@
   "description": "校递达后端公共模块",
   "main": "index.js",
   "dependencies": {
-    "uni-id-common": "file:../uni-id-common"
+    "uni-id-common": "file:../uni-id-common",
+    "uni-config-center": "file:../uni-config-center"
   }
 }
