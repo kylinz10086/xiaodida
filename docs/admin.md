@@ -46,6 +46,19 @@ cd F:\xiaodida
 
 > 重新编译 admin 后，需要重新执行 `node tools/patch-admin-cloud.cjs`，把产物里的云地址改成 `/admin/cloud` 并注入兼容补丁。
 
+### 2.1 后台登录依赖的云对象（别漏）
+
+登录除了 `uni-id-co`，验证码还要走 **`uni-captcha-co`**。少传它就报
+`[uni-captcha-co]: 函数不存在或者没有生效的版本`，点「登录」只弹这一句、密码根本不校验（2026-11-14 公网版首次登录就栽在这）。
+
+```powershell
+$cli = "F:\HBuilderX.5.05.2026032417\HBuilderX\cli.exe"
+& $cli cloud functions --upload common --prj admin --provider alipay --name uni-captcha --unimod uni-captcha
+& $cli cloud functions --upload cloudfunction --prj admin --provider alipay --name uni-captcha-co --unimod uni-captcha
+```
+
+补传后刷新页面即可，不用重新发布前端。
+
 重新编译：
 
 ```powershell
