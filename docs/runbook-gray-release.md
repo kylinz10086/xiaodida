@@ -168,6 +168,9 @@ await adm.createAdmin({ username: 'admin2', password: '换成你要的密码', n
 // 看现有管理员
 await adm.listAdmins()
 
+// 改昵称（uni-id-users 与扩展资料一起改，避免后台两处显示不一致）
+await adm.updateAdmin({ uid: '管理员uid', nickname: '校递达管理员' })
+
 // 撤销（不能撤自己；至少保留一个）
 await adm.revokeAdmin({ uid: '要撤销的uid' })
 ```

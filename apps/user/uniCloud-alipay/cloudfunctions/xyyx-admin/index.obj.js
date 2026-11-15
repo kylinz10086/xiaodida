@@ -714,6 +714,21 @@ const api = {
   },
 
   /**
+   * 改管理员昵称
+   * params: { uid, nickname }
+   */
+  async updateAdmin(params = {}) {
+    const auth = await C.requireAdmin(this)
+    const res = await C.setAdminNickname(params.uid || params.userId, params.nickname)
+    await C.audit(C.AUDIT_ACTION.ADMIN_UPDATE, auth, {
+      targetType: 'uni-id-user',
+      targetId: res.uid,
+      detail: { nickname: res.nickname }
+    })
+    return C.ok({ uid: res.uid, nickname: res.nickname }, '昵称已更新')
+  },
+
+  /**
    * 撤销管理员
    * params: { uid }
    */

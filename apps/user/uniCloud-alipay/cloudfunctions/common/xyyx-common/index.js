@@ -2133,7 +2133,8 @@ const AUDIT_ACTION = {
   RISK_BLOCK: 'risk.block',
   CONTENT_RISKY: 'content.risky',
   ADMIN_CREATE: 'admin.create',
-  ADMIN_REVOKE: 'admin.revoke'
+  ADMIN_REVOKE: 'admin.revoke',
+  ADMIN_UPDATE: 'admin.update'
 }
 
 /**
@@ -2690,6 +2691,28 @@ async function revokeAdmin(targetUid, actorUid) {
   return { uid: uid, username: target.username }
 }
 
+/**
+ * 改管理员昵称（uni-id-users + 扩展资料一起改，两处不一致会导致
+ * 后台右上角和「用户数据」列表显示成两个名字）。
+ */
+async function setAdminNickname(uid, nickname) {
+  const id = String(uid || '')
+  assert(id, 400, '缺少用户ID')
+  const name = str(nickname, { min: 2, max: 20, name: '昵称', required: true }).trim()
+  assert(name.length >= 2, 400, '昵称至少要 2 个字')
+
+  const res = await db.collection('uni-id-users').doc(id).get()
+  assert(res.data && res.data[0], 404, '账号不存在')
+
+  await db.collection('uni-id-users').doc(id).update({ nickname: name })
+  try {
+    await db.collection(COLL.users).doc(id).update({ nickname: name, update_time: Date.now() })
+  } catch (e) {
+    // 没有扩展资料也不影响登录
+  }
+  return { uid: id, nickname: name }
+}
+
 module.exports = {
   db,
   dbCmd,
@@ -2801,6 +2824,7 @@ module.exports = {
   listAdmins,
   createAdminAccount,
   revokeAdmin,
+  setAdminNickname,
   hashAdminPassword,
   verifyAdminPassword,
   PWD_PREFIX

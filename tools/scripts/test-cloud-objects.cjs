@@ -881,6 +881,19 @@ async function main() {
   try { await C.revokeAdmin('u_admin_self', 'someone_else') } catch (e) { lastAdmThrew = e.code === 400 }
   ok('最后一个管理员不能撤销', lastAdmThrew)
 
+  const renamed = await C.setAdminNickname('u_admin_self', '校递达管理员')
+  ok('改管理员昵称成功', renamed.nickname === '校递达管理员')
+  ok(
+    'uni-id-users 昵称已更新',
+    tableRows('uni-id-users').find((u) => u._id === 'u_admin_self').nickname === '校递达管理员'
+  )
+  let shortNickThrew = false
+  try { await C.setAdminNickname('u_admin_self', 'x') } catch (e) { shortNickThrew = e.code === 400 }
+  ok('过短昵称被拒', shortNickThrew)
+  let noUserThrew = false
+  try { await C.setAdminNickname('u_not_exist', '正常昵称') } catch (e) { noUserThrew = e.code === 404 }
+  ok('不存在的账号被拒（404）', noUserThrew)
+
   /* ---------------- 结果 ---------------- */
   console.log('')
   if (fails.length) {
