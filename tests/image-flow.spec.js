@@ -132,6 +132,25 @@ async function main() {
   const pubDetail = await call(userObj.getTaskDetail, taskId)
   eq(pubDetail.data.pick_proof_thumb, THUMB, '发布者详情能拿到留痕缩略图')
 
+  console.log('\n[6b] 留痕缩略图超限不再阻塞送达（1.2.4）')
+  // 线上真实事故：客户端按 560px/40KB 生成缩略图，服务端卡 20KB，
+  // 于是「送达」整单失败，提示「送达留痕缩略图过大」。缩略图只是展示用，不能挡主流程。
+  const bigThumb = 'data:image/jpeg;base64,' + 'A'.repeat(50000)
+  eq(C.imageThumb(bigThumb, { lenient: true }), '', 'lenient 模式：超限缩略图直接丢弃')
+  let strictErr = ''
+  try {
+    C.imageThumb(bigThumb, { name: '送达留痕缩略图' })
+  } catch (e) {
+    strictErr = (e && e.message) || ''
+  }
+  ok(/过大/.test(strictErr), '非 lenient 模式仍然报「过大」：' + strictErr)
+  setUid('rider-1')
+  const delivered = await call(riderObj.markDelivered, taskId, meta(), 'cloud://env-test/deliver.jpg', bigThumb)
+  eq(delivered.code, 0, '即使缩略图超限，送达也能成功: ' + delivered.msg)
+  eq(get('xyyx-tasks', taskId).deliver_proof, 'cloud://env-test/deliver.jpg', '原图 fileID 照样落库')
+  eq(get('xyyx-tasks', taskId).deliver_proof_thumb || '', '', '超限缩略图没写进去（不影响原图）')
+  setUid('pub-1')
+
   console.log('\n[7] 高清头像只给本人，不进列表')
   const hd = 'data:image/jpeg;base64,' + 'B'.repeat(50000)
   const saveHd = await call(userObj.updateProfile, { avatar_hd: hd, ...meta() })

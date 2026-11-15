@@ -30,6 +30,10 @@
     "minOrderYuan": { "bsonType": "double", "description": "订单最低金额（元）" },
     "maxOrderYuan": { "bsonType": "double", "description": "单笔订单上限（元）" },
     "minWithdrawYuan": { "bsonType": "double", "description": "单笔提现下限（元），0 = 不设下限" },
+    "settings_version": {
+      "bsonType": "int",
+      "description": "配置结构版本（对应代码里的 SETTINGS_VERSION）；默认值变更时靠它做一次性迁移，缺省视为 0"
+    },
     "grabPerMinute": { "bsonType": "int", "description": "抢单频率限制（每分钟次数）" },
     "abandonPerDay": { "bsonType": "int", "description": "放弃订单限制（每天次数）" },
     "supportMobile": { "bsonType": "string", "maxLength": 20, "description": "客服电话（展示用）" },

@@ -62,14 +62,8 @@ export function readBase64(filePath) {
  */
 const UPLOAD_TARGET_B64 = 560000
 
-export async function uploadImage(filePath, opts = {}) {
-	const role = opts.role || 'user'
-	const dir = opts.dir || 'misc'
-	const target = Number(opts.targetB64) || UPLOAD_TARGET_B64
-	const baseW = Number(opts.width) || 1080
-	const baseQ = Number(opts.quality) || 60
-
-	// 从「清晰」到「一定存得进去」逐档压
+/** 按目标 base64 长度逐档压缩（从清晰到省流） */
+async function compressToTarget(filePath, target, baseW, baseQ) {
 	const ladder = [
 		{ width: baseW, quality: baseQ },
 		{ width: Math.min(baseW, 1200), quality: 55 },
@@ -78,28 +72,42 @@ export async function uploadImage(filePath, opts = {}) {
 		{ width: 800, quality: 40 },
 		{ width: 720, quality: 35 }
 	]
-
-	let path = filePath
 	let b64 = ''
 	for (const step of ladder) {
-		path = await compressImage(filePath, step)
+		const path = await compressImage(filePath, step)
 		b64 = await readBase64(path)
 		if (!b64) throw new Error('读取图片失败')
 		if (b64.length <= target) break
 	}
+	return b64
+}
 
-	if (b64.length > 620000) throw new Error('图片太大，换一张小一点的图片试试')
+export async function uploadImage(filePath, opts = {}) {
+	const role = opts.role || 'user'
+	const dir = opts.dir || 'misc'
+	const baseW = Number(opts.width) || 1080
+	const baseQ = Number(opts.quality) || 60
 
-	const res = await apiOf(role).uploadImage({
-		base64: b64,
-		ext: 'jpg',
-		dir,
-		...requestMeta()
-	})
-	if (res.code !== 0) throw new Error(res.msg || '上传失败')
-	const data = res.data || {}
-	if (!data.fileID) throw new Error('上传返回异常')
-	return data.fileID
+	// 服务端返回 stored=false 表示「字节没能存进数据库」——云存储读不回来，
+	// 这张图之后就是「上传成功但看不了」。这时自动压小一档重传，宁可糊一点也要打得开。
+	const targets = [Number(opts.targetB64) || UPLOAD_TARGET_B64, 300000, 190000]
+	let lastId = ''
+	for (const target of targets) {
+		const b64 = await compressToTarget(filePath, target, baseW, baseQ)
+		if (b64.length > 620000) throw new Error('图片太大，换一张小一点的图片试试')
+		const res = await apiOf(role).uploadImage({
+			base64: b64,
+			ext: 'jpg',
+			dir,
+			...requestMeta()
+		})
+		if (res.code !== 0) throw new Error(res.msg || '上传失败')
+		const data = res.data || {}
+		if (!data.fileID) throw new Error('上传返回异常')
+		lastId = data.fileID
+		if (data.stored !== false) return data.fileID
+	}
+	return lastId
 }
 
 /** 头像压成 data URI：不依赖云存储/域名，也不会过期
@@ -371,12 +379,17 @@ export function fetchImageToTempFile(role, fileID) {
  */
 export async function thumbDataUri(filePath, opts = {}) {
 	const maxLen = opts.maxLen || 12000
-	const sizes = [
-		{ width: opts.width || 400, quality: 45 },
-		{ width: 280, quality: 40 },
-		{ width: 200, quality: 35 }
+	const width = Number(opts.width) || 400
+	// 从清晰到省流逐档试：先尽量保住清晰度，压不进 maxLen 再往下降
+	const ladder = [
+		{ width, quality: 50 },
+		{ width: Math.round(width * 0.86), quality: 46 },
+		{ width: Math.round(width * 0.72), quality: 42 },
+		{ width: Math.round(width * 0.58), quality: 38 },
+		{ width: Math.round(width * 0.44), quality: 34 },
+		{ width: 200, quality: 32 }
 	]
-	for (const s of sizes) {
+	for (const s of ladder) {
 		try {
 			const path = await compressImage(filePath, s)
 			const b64 = await readBase64(path)
@@ -408,9 +421,10 @@ export function askProofImage(opts = {}) {
 					success: async (img) => {
 						const path = img.tempFilePaths[0]
 						try {
-							// 留痕图只出现在订单详情，缩略图可以给大一点（560px / 40KB），
-							// 太小会糊成一片，太大又会把详情返回体撑爆
-							const thumb = await thumbDataUri(path, { width: 560, maxLen: 40000 })
+							// 留痕图只出现在订单详情，缩略图可以给大一点（560px / 36KB），
+							// 太小会糊成一片，太大又会把详情返回体撑爆。
+							// 服务端上限 44KB，且超限只丢缩略图、不影响送达（1.2.4 起）。
+							const thumb = await thumbDataUri(path, { width: 560, maxLen: 36000 })
 							const fileID = await uploadImage(path, {
 								role: opts.role || 'rider',
 								dir: 'proof',

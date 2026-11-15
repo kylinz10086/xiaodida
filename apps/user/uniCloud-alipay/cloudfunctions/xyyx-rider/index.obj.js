@@ -282,7 +282,7 @@ const api = {
     const patch = { picked_time: Date.now() }
     if (proof) {
       patch.pick_proof = proof
-      const thumb = C.imageThumb(proofThumb, { name: '取件留痕缩略图' })
+      const thumb = C.imageThumb(proofThumb, { name: '取件留痕缩略图', lenient: true })
       if (thumb) patch.pick_proof_thumb = thumb
     }
 
@@ -323,7 +323,7 @@ const api = {
     }
     if (proof) {
       patch.deliver_proof = proof
-      const thumb = C.imageThumb(proofThumb, { name: '送达留痕缩略图' })
+      const thumb = C.imageThumb(proofThumb, { name: '送达留痕缩略图', lenient: true })
       if (thumb) patch.deliver_proof_thumb = thumb
     }
 

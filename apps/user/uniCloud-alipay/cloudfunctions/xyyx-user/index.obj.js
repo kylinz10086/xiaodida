@@ -125,7 +125,7 @@ const api = {
     const imageIds = Array.isArray(input.images) ? input.images.slice(0, 6).map((x) => String(x).slice(0, 300)) : []
     // 缩略图和 fileID 一一对应（同下标），只用于展示
     const imageThumbInput = Array.isArray(input.image_thumbs) ? input.image_thumbs : []
-    const imageThumbs = imageIds.map((id, i) => (id ? C.imageThumb(imageThumbInput[i], { name: '图片缩略图' }) : ''))
+    const imageThumbs = imageIds.map((id, i) => (id ? C.imageThumb(imageThumbInput[i], { name: '图片缩略图', lenient: true }) : ''))
 
     const task = {
       title,
@@ -342,7 +342,7 @@ const api = {
     if ('images' in input) {
       patch.images = Array.isArray(input.images) ? input.images.slice(0, 6).map((x) => String(x).slice(0, 300)) : []
       const thumbInput = Array.isArray(input.image_thumbs) ? input.image_thumbs : []
-      patch.image_thumbs = patch.images.map((id, i) => (id ? C.imageThumb(thumbInput[i], { name: '图片缩略图' }) : ''))
+      patch.image_thumbs = patch.images.map((id, i) => (id ? C.imageThumb(thumbInput[i], { name: '图片缩略图', lenient: true }) : ''))
       changed = true
     }
     if ('mobile' in input) {

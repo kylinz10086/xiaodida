@@ -172,7 +172,10 @@ async function loadSettings(force) {
       _settings = normalizeSettings(doc)
       // 后台保存过的配置不会被代码默认值覆盖，所以「改了默认值要生效」得走一次性迁移。
       // 这里只动需要变的项，管理员调过的其它配置原样保留。
-      if (Number(doc.settings_version) < SETTINGS_VERSION) {
+      // 老文档可能根本没有 settings_version（Number(undefined)=NaN，NaN<3 为 false 会漏掉迁移），
+      // 所以缺省当 0 处理：只要版本对不上就迁一次。
+      const docVersion = Number(doc.settings_version) || 0
+      if (docVersion < SETTINGS_VERSION) {
         // 1.2.2：提现下限取消（0 = 不限）。管理员之后想把下限加回来，在后台改就行。
         _settings.minWithdrawYuan = 0
         await db
@@ -481,13 +484,30 @@ function int(value, { min = 0, max = 1e9, name = '字段' } = {}) {
  * 没配置就整片裂图，临时链接还会过期。所以聊天图片、留痕图片都在发送时
  * 带一张内嵌的缩略图，展示只靠它；原图另存在云存储，点开预览才用。
  */
-const IMAGE_THUMB_MAX = 20000
+const IMAGE_THUMB_MAX = 44000
 const IMAGE_THUMB_RE = /^data:image\/(?:jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=\s]+$/
 
+/**
+ * 校验缩略图 data URI。
+ *
+ * ⚠️ 缩略图只是「展示用」，不能因为它把主流程搞挂：
+ * 1.2.2 之前客户端按 560px/40KB 生成留痕缩略图，服务端却卡 20KB，
+ * 结果「送达」整单失败（提示「送达留痕缩略图过大」）。现在：
+ *   - 上限放宽到 44KB（客户端最多传 36KB）；
+ *   - lenient=true 时，超限/格式不对就当没传（返回 ''），原图 fileID 照样存，
+ *     详情页还能走数据库直读取原图 —— 绝不能因为一张缩略图让骑手送不了单。
+ */
 function imageThumb(value, opts = {}) {
   const v = value === undefined || value === null ? '' : String(value).trim()
   if (!v) return ''
-  assert(v.length <= (opts.max || IMAGE_THUMB_MAX), 400, `${opts.name || '图片缩略图'}过大`)
+  const max = opts.max || IMAGE_THUMB_MAX
+  const ok = v.length <= max && IMAGE_THUMB_RE.test(v)
+  if (ok) return v
+  if (opts.lenient) {
+    console.warn('[xyyx-common] 缩略图被丢弃（不阻塞主流程）：', opts.name || '图片缩略图', v.length, '字节字符')
+    return ''
+  }
+  assert(v.length <= max, 400, `${opts.name || '图片缩略图'}过大`)
   assert(IMAGE_THUMB_RE.test(v), 400, `${opts.name || '图片缩略图'}格式不对`)
   return v
 }

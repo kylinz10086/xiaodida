@@ -11,7 +11,7 @@
     "content": { "bsonType": "string", "maxLength": 300, "description": "消息正文（文本）或图片 fileID" },
     "thumb": {
       "bsonType": "string",
-      "maxLength": 20000,
+      "maxLength": 44000,
       "description": "图片消息的缩略图 data URI：小程序直接展示，不依赖云存储域名/临时链接"
     },
     "type": { "bsonType": "string", "enum": ["text", "system", "image"], "description": "消息类型" },
