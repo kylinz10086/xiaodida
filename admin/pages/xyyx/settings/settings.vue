@@ -59,10 +59,10 @@
 				<view class="field">
 					<view class="field-label">
 						<text class="label">提现下限（元）</text>
-						<text class="hint">骑手单笔提现的最低金额</text>
+						<text class="hint">0 = 不设下限（1 分也能提）；填大于 0 时才拦</text>
 					</view>
 					<view class="field-input">
-						<input class="input" type="digit" v-model="form.minWithdrawYuan" placeholder="3" />
+						<input class="input" type="digit" v-model="form.minWithdrawYuan" placeholder="0" />
 						<text class="unit">元</text>
 					</view>
 				</view>
@@ -158,7 +158,7 @@
 					refundFeePercent: '0',
 					minOrderYuan: '1',
 					maxOrderYuan: '1000',
-					minWithdrawYuan: '3',
+					minWithdrawYuan: '0',
 					autoSettleOnDeliver: true,
 					autoConfirmHours: '24',
 					grabPerMinute: '30',
@@ -247,7 +247,7 @@
 								refundFeeRate: rRate,
 								minOrderYuan: minY,
 								maxOrderYuan: maxY,
-								minWithdrawYuan: this.num(this.form.minWithdrawYuan, 3),
+								minWithdrawYuan: this.num(this.form.minWithdrawYuan, 0),
 								autoSettleOnDeliver: !!this.form.autoSettleOnDeliver,
 								autoConfirmHours: Math.round(this.num(this.form.autoConfirmHours, 24)),
 								grabPerMinute: Math.round(this.num(this.form.grabPerMinute, 30)),

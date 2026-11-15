@@ -77,6 +77,12 @@ function matchValue(docVal, condVal) {
       return Object.keys(condVal).every((k) => matchValue(docVal[k], condVal[k]))
     }
   }
+  // MongoDB 语义：{role:'admin'} 既匹配 role='admin'，也匹配 role=['admin']
+  // （uni-id 把 role 存成数组，不实现这条会让「按角色查管理员」在测试里永远是空）
+  if (Array.isArray(docVal) && !Array.isArray(condVal)) return docVal.indexOf(condVal) >= 0
+  if (Array.isArray(docVal) && Array.isArray(condVal)) {
+    return JSON.stringify(docVal) === JSON.stringify(condVal)
+  }
   return docVal === condVal
 }
 
@@ -222,9 +228,28 @@ const uniIDMock = {
 
 /* ---------------- require 真实的云对象 ---------------- */
 
+/* ---------------- uni-config-center 桩 ---------------- */
+
+// 只实现 yyx-common 用到的读法：config(点号路径, 默认值)
+const TEST_PEPPER = 'testpepper0123456789abcdef'
+const uniConfigCenterMock = function () {
+  return {
+    config: (p, def) => {
+      if (p === 'passwordSecret') {
+        return [{ type: 'scrypt-salted', version: 1, value: TEST_PEPPER }]
+      }
+      // 内容安全：这里故意不给 appid/secret，验证「没配就跳过」的分支
+      if (p === 'mp-weixin.oauth.weixin.appid') return ''
+      if (p === 'mp-weixin.oauth.weixin.appsecret') return ''
+      return def
+    }
+  }
+}
+
 const origLoad = Module._load
 Module._load = function (request, parent, isMain) {
   if (request === 'uni-id-common') return uniIDMock
+  if (request === 'uni-config-center') return uniConfigCenterMock
   if (request === 'xyyx-common') return C
   return origLoad.call(this, request, parent, isMain)
 }
@@ -785,6 +810,76 @@ async function main() {
   const auditList = await C.listAuditLogs({ limit: 5 })
   ok('审计列表按时间倒序', auditList.list.length > 0 && auditList.list.every((l, i, a) => i === 0 || a[i - 1].create_time >= l.create_time))
   ok('审计列表带可读时间', !!auditList.list[0].time_text)
+
+  /* ---------------- 15. 管理员账号（v1.2.0） ---------------- */
+  section('15. 管理员账号创建 / 撤销')
+
+  const ADM_PWD = 'Xy9-admin-2026'
+  const createdAdm = await C.createAdminAccount({
+    username: 'admin2',
+    password: ADM_PWD,
+    nickname: '审核员'
+  })
+  ok('创建管理员返回 uid', !!createdAdm.uid && createdAdm.username === 'admin2')
+  const admDoc = tableRows('uni-id-users').find((u) => u._id === createdAdm.uid)
+  ok('写入 uni-id-users 且 role 含 admin', !!admDoc && Array.isArray(admDoc.role) && admDoc.role.indexOf('admin') >= 0)
+  ok('密码不以明文入库', admDoc.password !== ADM_PWD && admDoc.password.indexOf('scrypt$v1$') === 0, admDoc.password)
+  ok('扩展资料同步为 admin', tableRows(C.COLL.users).find((u) => u._id === createdAdm.uid).role === 'admin')
+
+  // 关键：这里生成的哈希必须能被 uni-id 真正的自定义密码策略验证通过，
+  // 否则建出来的账号登录不进去（两套实现漂移是这个功能最大的坑）
+  const customPwd = require(path.join(CLOUD, 'cloudfunctions', 'common', 'uni-config-center', 'uni-id', 'custom-password.js'))
+  ok(
+    '哈希能被 uni-id custom-password 验证通过',
+    customPwd.verifyPassword({
+      password: ADM_PWD,
+      userRecord: { password: admDoc.password },
+      passwordSecret: { value: TEST_PEPPER }
+    }) === true
+  )
+  ok(
+    '错误密码验证失败',
+    customPwd.verifyPassword({
+      password: 'wrong-password',
+      userRecord: { password: admDoc.password },
+      passwordSecret: { value: TEST_PEPPER }
+    }) === false
+  )
+
+  let dupAdmThrew = false
+  try { await C.createAdminAccount({ username: 'admin2', password: ADM_PWD }) } catch (e) { dupAdmThrew = e.code === 400 }
+  ok('重复用户名被拒', dupAdmThrew)
+
+  let weakThrew = false
+  try { await C.createAdminAccount({ username: 'admin3', password: '12345678' }) } catch (e) { weakThrew = e.code === 400 }
+  ok('弱密码被拒', weakThrew)
+
+  let badNameThrew = false
+  try { await C.createAdminAccount({ username: 'A!', password: ADM_PWD }) } catch (e) { badNameThrew = e.code === 400 }
+  ok('非法用户名被拒', badNameThrew)
+
+  tableRows('uni-id-users').push({
+    _id: 'u_admin_self',
+    username: 'xyyxadmin',
+    role: ['admin'],
+    status: 0,
+    register_date: Date.now() - 1000
+  })
+  const adminList = await C.listAdmins()
+  ok('管理员列表含新账号', adminList.list.some((a) => a.username === 'admin2'))
+  ok('管理员列表手机号脱敏', adminList.list.every((a) => !a.mobile || a.mobile.indexOf('****') > 0))
+
+  let selfRevokeThrew = false
+  try { await C.revokeAdmin('u_admin_self', 'u_admin_self') } catch (e) { selfRevokeThrew = e.code === 400 }
+  ok('不能撤销自己', selfRevokeThrew)
+
+  const revoked = await C.revokeAdmin(createdAdm.uid, 'u_admin_self')
+  ok('撤销管理员成功', revoked.uid === createdAdm.uid)
+  ok('撤销后不再是管理员', tableRows('uni-id-users').find((u) => u._id === createdAdm.uid).role.length === 0)
+
+  let lastAdmThrew = false
+  try { await C.revokeAdmin('u_admin_self', 'someone_else') } catch (e) { lastAdmThrew = e.code === 400 }
+  ok('最后一个管理员不能撤销', lastAdmThrew)
 
   /* ---------------- 结果 ---------------- */
   console.log('')

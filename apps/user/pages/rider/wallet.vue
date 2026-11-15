@@ -20,7 +20,7 @@
 		<view class="card">
 			<view class="card-title">
 				<text>申请提现</text>
-				<text class="card-extra">最低 {{ minWithdraw }} 元</text>
+				<text class="card-extra">{{ minWithdraw > 0 ? '最低 ' + minWithdraw + ' 元' : '不限最低金额' }}</text>
 			</view>
 
 			<view class="withdraw-row">
@@ -35,6 +35,18 @@
 
 			<view class="btn btn-primary" :class="{ disabled: submitting }" @click="withdraw">
 				{{ submitting ? '提交中…' : '申请提现' }}
+			</view>
+
+			<!-- 提现规则：审核要求提现页清晰展示额度 / 次数 / 时间 / 到账时间 -->
+			<view class="rule-box">
+				<view class="rule-head">
+					<text class="rule-title">提现规则</text>
+					<text class="rule-sub">提交前请先了解</text>
+				</view>
+				<view class="rule-item" v-for="(r, i) in withdrawRules" :key="i">
+					<text class="rule-dot">{{ i + 1 }}</text>
+					<text class="rule-text">{{ r }}</text>
+				</view>
 			</view>
 		</view>
 
@@ -92,18 +104,28 @@
 				amount: '',
 				submitting: false,
 				withdrawals: [],
-				// 与云函数里的风控常量保持一致（1.11.3 起 1 元起提）
-				minWithdraw: 1,
+				// 与云函数里的风控常量保持一致（1.2.2 起取消下限，0 = 1 分也能提）
+				minWithdraw: 0,
 				maxWithdraw: 200,
-				maxDaily: 500
+				maxDaily: 500,
+				/** 提现规则（审核要求：提现页要写清额度 / 次数 / 时间 / 到账时间） */
+				withdrawRules: [
+					'可提现额度：账户「可提现余额」的全部金额，最低 0.01 元起提，单笔最高 200 元',
+					'每日提现次数：每天最多 20 次，两次提现至少间隔 1 分钟',
+					'每日提现上限：单日累计最多提现 500 元',
+					'提现时间：全天 24 小时随时可提，节假日照常（系统维护除外）',
+					'到账时间：提交后通过微信「商家转账」打款到你的微信零钱，确认收款后一般即时到账',
+					'手续费：平台不收取提现手续费，提多少到账多少',
+					'未确认处理：24 小时内没在微信里点「确认收款」，该笔转账自动取消，金额退回可提现余额'
+				]
 			}
 		},
 		computed: {
 			...mapGetters('rider', ['wallet']),
 			quickAmounts() {
 				const balance = Number(this.wallet.balance) || 0
-				const list = [1, 3, 5, 10].filter((n) => n <= balance)
-				return list
+				// 取消下限后，余额只有几毛钱也得有可点的快捷金额
+				return [0.5, 1, 3, 5, 10].filter((n) => n <= balance)
 			},
 			/** 提现状态 → 颜色类名（模板里不能直接调方法，走映射表） */
 			stateClassMap() {
@@ -200,8 +222,8 @@
 
 			fillAll() {
 				const balance = Number(this.wallet.balance) || 0
-				if (balance < this.minWithdraw) {
-					uni.showToast({ title: `余额不足 ${this.minWithdraw} 元`, icon: 'none' })
+				if (!(balance > 0)) {
+					uni.showToast({ title: '暂无可提现余额', icon: 'none' })
 					return
 				}
 				// 单笔有上限，超过就只填到上限，剩下的下次再提
@@ -211,7 +233,10 @@
 			async withdraw() {
 				if (this.submitting) return
 				const n = Number(this.amount)
-				if (!(n >= this.minWithdraw)) return uni.showToast({ title: `最低提现 ${this.minWithdraw} 元`, icon: 'none' })
+				if (!(n > 0)) return uni.showToast({ title: '请输入提现金额', icon: 'none' })
+				if (this.minWithdraw > 0 && n < this.minWithdraw) {
+					return uni.showToast({ title: `最低提现 ${this.minWithdraw} 元`, icon: 'none' })
+				}
 				if (n > this.maxWithdraw) return uni.showToast({ title: `单笔最多 ${this.maxWithdraw} 元`, icon: 'none' })
 				if (n > (Number(this.wallet.balance) || 0)) return uni.showToast({ title: '超出可提现余额', icon: 'none' })
 
@@ -373,6 +398,35 @@
 	}
 
 	.tip { display: block; margin-top: 16rpx; font-size: 22rpx; color: #8e8e93; line-height: 1.6; }
+
+	.rule-box {
+		margin-top: 26rpx;
+		padding: 22rpx 24rpx 12rpx;
+		background: #f7f8fa;
+		border-radius: 16rpx;
+	}
+	.rule-head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		margin-bottom: 14rpx;
+	}
+	.rule-title { font-size: 26rpx; font-weight: 600; color: #1c1c1e; }
+	.rule-sub { font-size: 21rpx; color: #8e8e93; }
+	.rule-item { display: flex; align-items: flex-start; margin-bottom: 12rpx; }
+	.rule-dot {
+		flex: none;
+		width: 32rpx;
+		height: 32rpx;
+		line-height: 32rpx;
+		margin: 2rpx 12rpx 0 0;
+		text-align: center;
+		font-size: 20rpx;
+		color: #007aff;
+		background: rgba(0, 122, 255, 0.1);
+		border-radius: 50%;
+	}
+	.rule-text { flex: 1; font-size: 22rpx; line-height: 1.62; color: #6e6e73; }
 
 	.wd {
 		display: flex;

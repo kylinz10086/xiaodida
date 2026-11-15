@@ -5,6 +5,7 @@
  * 以前的提现是「扣余额 → 进 frozen → 等人工审核」，但后台没有审核入口，
  * 钱提出来就永远卡住。现在改成自动处理，用代码做风控：
  *   认证骑手 / 单笔上限 / 单日次数 / 单日累计 / 冷却 / CAS 防并发 / 流水留痕。
+ * 1.2.2 起取消提现下限（配置 minWithdrawYuan=0，1 分也能提），风控项不变。
  *
  * 运行：node tests/withdraw-flow.spec.js
  */
@@ -62,8 +63,9 @@ async function main() {
 
   console.log('\n[2] 金额校验')
   setUid('rider-1')
-  const tooSmall = await call(payObj.requestWithdraw, { amount: 0.5, ...meta() })
-  eq(tooSmall.code, 400, '低于 1 元被拒')
+  // 1.2.2 起取消提现下限（0 = 不限，1 分也能提），这里只挡「没填/填 0」
+  const zero = await call(payObj.requestWithdraw, { amount: 0, ...meta() })
+  eq(zero.code, 400, '0 元被拒')
   const tooBig = await call(payObj.requestWithdraw, { amount: 300, ...meta() })
   eq(tooBig.code, 400, '单笔超过 200 元被拒')
 
@@ -223,6 +225,21 @@ async function main() {
   const overCount = await call(payObj.requestWithdraw, { amount: 1, ...meta() })
   eq(overCount.code, 400, '已经 20 次，第 21 次被拒')
   ok(/20 次/.test(overCount.msg || ''), '提示写明每天 20 次：' + overCount.msg)
+
+  console.log('\n[11] 已取消提现下限：1 分也能提')
+  coll('xyyx-transactions').clear()
+  get('xyyx-wallets', 'rider-1').balance_cent = 100
+  process.env.XYYX_WITHDRAW_MOCK = 'success'
+  const tiny = await call(payObj.requestWithdraw, { amount: 0.01, ...meta() })
+  eq(tiny.code, 0, '0.01 元提现成功: ' + tiny.msg)
+  eq(tiny.data && tiny.data.amount, 0.01, '返回金额 0.01 元')
+  eq(get('xyyx-wallets', 'rider-1').balance_cent, 99, '只扣 1 分，余额剩 0.99 元')
+  ok(
+    Array.from(coll('xyyx-transactions').values()).some(
+      (t) => t.type === 'withdraw' && t.amount_cent === -1
+    ),
+    '1 分的提现也写了流水'
+  )
 
   console.log('\n-----------------------------')
   console.log('passed ' + passed + ', failed ' + failures.length)

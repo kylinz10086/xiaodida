@@ -680,6 +680,52 @@ const api = {
       detail: { hours: hours, reason: String(params.reason || '').slice(0, 100), until: patch.banned_until }
     })
     return C.ok({ banned_until: patch.banned_until || 0 }, hours > 0 ? '已封禁' : '已解封')
+  },
+
+  /* ---------------- 管理员账号 ---------------- */
+
+  /** 管理员列表 */
+  async listAdmins() {
+    await C.requireAdmin(this)
+    const data = await C.listAdmins()
+    return C.ok(data)
+  },
+
+  /**
+   * 新建管理员账号
+   * params: { username, password, nickname }
+   *
+   * 密码只以 scrypt 哈希入库，任何人（包括这里）都读不回来。
+   * 创建完让对方直接用这个用户名 + 密码登录管理后台。
+   */
+  async createAdmin(params = {}) {
+    const auth = await C.requireAdmin(this)
+    const res = await C.createAdminAccount({
+      username: params.username,
+      password: params.password,
+      nickname: params.nickname
+    })
+    await C.audit(C.AUDIT_ACTION.ADMIN_CREATE, auth, {
+      targetType: 'uni-id-user',
+      targetId: res.uid,
+      detail: { username: res.username, nickname: res.nickname }
+    })
+    return C.ok({ uid: res.uid, username: res.username }, '管理员已创建，请让对方用这个账号登录后台')
+  },
+
+  /**
+   * 撤销管理员
+   * params: { uid }
+   */
+  async revokeAdmin(params = {}) {
+    const auth = await C.requireAdmin(this)
+    const res = await C.revokeAdmin(params.uid, auth.uid)
+    await C.audit(C.AUDIT_ACTION.ADMIN_REVOKE, auth, {
+      targetType: 'uni-id-user',
+      targetId: res.uid,
+      detail: { username: res.username }
+    })
+    return C.ok({ uid: res.uid }, '已撤销管理员权限')
   }
 }
 

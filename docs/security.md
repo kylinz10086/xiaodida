@@ -116,7 +116,7 @@ taskForRider(task, riderId)   // 骑手端：接单前无手机号，接单后�
 
 - 新集合 `xyyx-audit-logs`（schema 全禁，只读经云对象）：`action / actor_uid / actor_role /
   target_type / target_id / result / detail / create_time`。
-- 已接入：骑手审核、封禁/解封、改系统配置、提现、风控拦截、内容违规。
+- 已接入：骑手审核、封禁/解封、改系统配置、提现、风控拦截、内容违规、管理员创建/撤销。
 - **写入是旁路**：`C.audit()` 内部吞掉所有异常（集合没建、detail 循环引用、超长），
   绝不因为写日志失败把支付/接单带崩。
 - 查询：`xyyx-admin.listAuditLogs({ action, uid, targetId, since, limit })`。

@@ -13,7 +13,7 @@ node tests/rider-flow.spec.js
 # 图片：头像（压缩/高清）、聊天缩略图、服务端取图、订单/留痕缩略图、列表不带图（39 项断言）
 node tests/image-flow.spec.js
 
-# 提现：自动处理 + 风控（认证、单笔/单日上限、冷却、冻结退回）（18 项断言）
+# 提现：自动处理 + 风控（认证、单笔/单日上限、冷却、冻结退回、0 元起提）（47 项断言）
 node tests/withdraw-flow.spec.js
 
 # 静态检查：.vue 的 <script> 能不能解析、<template> 标签有没有配对

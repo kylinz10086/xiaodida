@@ -146,6 +146,38 @@ await ops.purgeBusiness({ confirm: 'PURGE-BUSINESS', dryRun: false })
 
 > `wxAppSecret` 只存在 `yyyx-settings`（schema 全禁，客户端读不到），
 > 但仍是**明文存库**。要更严的做法是接 uni-open-bridge，见后续计划。
+> （1.2.0 起这条可以留空：代码会回落到 `uni-id/config.json` 里的同一个 AppSecret。）
+
+### 4.1 加管理员账号
+
+后台目前只有一个初始管理员 `xyyxadmin`。加人要两步：先登录现有管理员，再由后端建号。
+
+**为什么不能用 `uni-id-co.registerAdmin`**：它发现库里已有管理员就直接拒绝（`ERROR.ADMIN_EXISTS`），
+只适合首次初始化。`registerUser` 又要图形验证码，服务端调不了。
+所以 `yyyx-admin.createAdmin` 自己建 `uni-id-users` 文档，密码算法和
+`custom-password.js` 完全一致（有测试用官方 `verifyPassword` 反向校验，防止两套实现漂移）。
+
+在管理后台（登录后）浏览器控制台执行：
+
+```js
+const adm = uniCloud.importObject('xyyx-admin', { customUI: true })
+
+// 建号：用户名只能小写字母/数字/下划线 3-20 位；密码 8-64 位，弱密码会被拒
+await adm.createAdmin({ username: 'admin2', password: '换成你要的密码', nickname: '审核员' })
+
+// 看现有管理员
+await adm.listAdmins()
+
+// 撤销（不能撤自己；至少保留一个）
+await adm.revokeAdmin({ uid: '要撤销的uid' })
+```
+
+注意事项：
+
+- 新账号**不绑 dcloud_appid**（全局账号），管理后台 H5 能登录，小程序端也能登录（在用户端就是个普通用户）。
+- 密码只以 `scrypt$v1$<salt>$<hash>` 入库，谁都读不回来；忘了就 `revokeAdmin` 再建一个。
+- 建号/撤销都会写 `admin.create` / `admin.revoke` 审计。
+- 新管理员第一次登录后建议去「修改密码」页换掉初始密码。
 
 ---
 

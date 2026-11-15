@@ -887,8 +887,11 @@ const api = {
     const amountCent = Math.round(Number(data.amount) * 100)
     C.assert(Number.isFinite(amountCent) && amountCent > 0, 400, '提现金额不合法')
     const s = C.S()
-    const minCent = Math.round(s.minWithdrawYuan * 100)
-    C.assert(amountCent >= minCent, 400, `提现金额不能低于 ${s.minWithdrawYuan} 元`)
+    // 提现下限由配置控制，默认 0 = 不限（1 分也能提）；后台临时收紧时这里才拦。
+    const minCent = Math.round(Number(s.minWithdrawYuan) * 100)
+    if (minCent > 0) {
+      C.assert(amountCent >= minCent, 400, `提现金额不能低于 ${s.minWithdrawYuan} 元`)
+    }
     C.assert(amountCent <= 20000, 400, '单笔最多提现 200 元，可分几次提')
 
     const since = todayStart()

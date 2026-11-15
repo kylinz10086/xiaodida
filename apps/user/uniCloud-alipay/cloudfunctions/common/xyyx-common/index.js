@@ -45,10 +45,12 @@ const DEFAULT_SETTINGS = {
   /** 订单金额区间（元） */
   minOrderYuan: 1,
   maxOrderYuan: 1000,
-  /** 单笔提现下限（元）
-   *  1.11.3 起从 3 元降到 1 元：学生单笔收入常常就几块钱，3 元门槛等于提不出来。
-   *  真正的风控不靠这个门槛，靠单笔上限 / 单日次数 / 单日累计 / 冷却。 */
-  minWithdrawYuan: 1,
+  /** 单笔提现下限（元），0 = 不设下限（1 分也能提）
+   *  1.11.3：3 元 → 1 元；1.2.2 起直接取消下限 —— 跑腿单笔收入本来就零碎，
+   *  余额攒到 0.5 元却提不出来没有道理。
+   *  真正的风控不靠这个门槛，靠单笔上限 / 单日次数 / 单日累计 / 冷却。
+   *  后台仍可调高（比如临时收紧），调成 0 就是不限。 */
+  minWithdrawYuan: 0,
   /** 抢单频率限制：每分钟最多几次 */
   grabPerMinute: 30,
   /** 放弃订单限制：每天最多几次 */
@@ -78,7 +80,7 @@ const DEFAULT_SETTINGS = {
 
 const SETTINGS_TTL = 60 * 1000
 /** 配置结构版本：改了默认值、又需要老配置跟着变时 +1，loadSettings 里做一次性迁移 */
-const SETTINGS_VERSION = 2
+const SETTINGS_VERSION = 3
 let _settings = null
 let _settingsAt = 0
 
@@ -171,12 +173,13 @@ async function loadSettings(force) {
       // 后台保存过的配置不会被代码默认值覆盖，所以「改了默认值要生效」得走一次性迁移。
       // 这里只动需要变的项，管理员调过的其它配置原样保留。
       if (Number(doc.settings_version) < SETTINGS_VERSION) {
-        _settings.minWithdrawYuan = 1
+        // 1.2.2：提现下限取消（0 = 不限）。管理员之后想把下限加回来，在后台改就行。
+        _settings.minWithdrawYuan = 0
         await db
           .collection(COLL.settings)
           .doc('app')
           .update({
-            minWithdrawYuan: 1,
+            minWithdrawYuan: 0,
             settings_version: SETTINGS_VERSION,
             update_time: now
           })
@@ -2128,7 +2131,9 @@ const AUDIT_ACTION = {
   TASK_SETTLE: 'task.settle',
   TASK_PURGE: 'task.purge',
   RISK_BLOCK: 'risk.block',
-  CONTENT_RISKY: 'content.risky'
+  CONTENT_RISKY: 'content.risky',
+  ADMIN_CREATE: 'admin.create',
+  ADMIN_REVOKE: 'admin.revoke'
 }
 
 /**
@@ -2358,12 +2363,19 @@ const _wxToken = { value: '', expire: 0 }
  * 没填就回到 config.json。
  */
 function configCenterValue(path) {
+  const v = configCenterRaw(path, '')
+  return v === undefined || v === null ? '' : String(v)
+}
+
+/** 同上，但保留原始类型（数组/对象不转字符串） */
+function configCenterRaw(path, fallback) {
   try {
     const createConfig = require('uni-config-center')
     const cfg = createConfig({ pluginId: 'uni-id' })
-    return String(cfg.config(path, '') || '')
+    const v = cfg.config(path, fallback)
+    return v === undefined ? fallback : v
   } catch (e) {
-    return ''
+    return fallback
   }
 }
 
@@ -2522,6 +2534,162 @@ async function flagImage(uid, fileID, scene) {
   return { ok: true, pending: true, scene: Number(scene) || 2 }
 }
 
+/* ---------------- 管理员账号 ---------------- */
+
+/**
+ * 管理员账号管理。
+ *
+ * 为什么不复用 uni-id-co.registerAdmin：它发现库里**已有一个管理员就直接拒绝**
+ * （ERROR.ADMIN_EXISTS），只适合首次初始化；我们要的是「已有管理员再加一个同事」。
+ * 也不用 registerUser：它要图形验证码，服务端调用拿不到。
+ *
+ * 所以这里自己建 uni-id-users 文档，但**密码算法必须和
+ * uni-config-center/uni-id/custom-password.js 完全一致**，
+ * 否则建出来的账号登录不进去。一致性由 test-cloud-objects.cjs 第 16 节验证
+ * （用真正的 custom-password.verifyPassword 校验这里生成的哈希）。
+ */
+
+const PWD_PREFIX = 'scrypt$v1$'
+const PWD_SALT_BYTES = 16
+const PWD_KEY_LEN = 32
+const PWD_SCRYPT = { N: 16384, r: 8, p: 1, maxmem: 128 * 1024 * 1024 }
+
+function scryptHashOf(password, salt, pepper) {
+  const material = Buffer.concat([salt, Buffer.from(String(pepper), 'utf8')])
+  return crypto.scryptSync(String(password), material, PWD_KEY_LEN, PWD_SCRYPT)
+}
+
+/** 生成与 uni-id 自定义策略一致的密码哈希串 */
+function hashAdminPassword(password, pepper) {
+  const salt = crypto.randomBytes(PWD_SALT_BYTES)
+  const hash = scryptHashOf(password, salt, pepper)
+  return `${PWD_PREFIX}${salt.toString('base64')}$${hash.toString('base64')}`
+}
+
+/** 校验密码哈希（给自己用，格式不对一律 false） */
+function verifyAdminPassword(password, stored, pepper) {
+  const s = String(stored || '')
+  if (s.indexOf(PWD_PREFIX) !== 0) return false
+  try {
+    const rest = s.slice(PWD_PREFIX.length)
+    const sep = rest.indexOf('$')
+    if (sep <= 0) return false
+    const salt = Buffer.from(rest.slice(0, sep), 'base64')
+    const expected = Buffer.from(rest.slice(sep + 1), 'base64')
+    const actual = scryptHashOf(password, salt, pepper)
+    if (actual.length !== expected.length) return false
+    return crypto.timingSafeEqual(actual, expected)
+  } catch (e) {
+    return false
+  }
+}
+
+/** 取 uni-id 的 passwordSecret（pepper） */
+function pepperOf() {
+  const ps = configCenterRaw('passwordSecret', [])
+  const secret = Array.isArray(ps) ? ps[0] : ps
+  return secret && typeof secret.value === 'string' ? secret : null
+}
+
+/** 管理员列表（uni-id-users.role 含 admin） */
+async function listAdmins() {
+  let res
+  try {
+    res = await db.collection('uni-id-users').where({ role: 'admin' }).limit(100).get()
+  } catch (e) {
+    return { list: [] }
+  }
+  const list = (res.data || []).map((u) => ({
+    _id: u._id,
+    nickname: u.nickname || '',
+    username: u.username || '',
+    mobile: maskMobile(u.mobile || ''),
+    status: Number(u.status) || 0,
+    create_time: u.register_date || u.create_date || 0,
+    last_login_time: u.last_login_date || 0
+  }))
+  list.sort((a, b) => (b.create_time || 0) - (a.create_time || 0))
+  return { list }
+}
+
+/**
+ * 新建一个管理员账号（由已有管理员调用）。
+ * 不打印、不返回密码；密码只以 scrypt 哈希入库。
+ */
+async function createAdminAccount(input) {
+  const src = input || {}
+  const username = String(src.username || '').trim().toLowerCase()
+  const password = String(src.password || '')
+  const nickname = String(src.nickname || '').trim().slice(0, 20)
+
+  assert(/^[a-z0-9_]{3,20}$/.test(username), 400, '用户名只能用小写字母/数字/下划线，长度 3-20')
+  assert(password.length >= 8 && password.length <= 64, 400, '密码长度需要 8-64 位')
+  assert(!/^(12345678|87654321|password|admin123|qwertyui|abc12345)/i.test(password), 400, '密码太简单，换一个')
+
+  const secret = pepperOf()
+  assert(secret && secret.value && secret.value.length >= 16, 500, '当前空间没配 passwordSecret，无法创建管理员')
+
+  const exists = await db.collection('uni-id-users').where({ username }).limit(1).get()
+  assert(!(exists.data && exists.data.length), 400, '用户名已存在')
+
+  const now = Date.now()
+  const doc = {
+    username: username,
+    password: hashAdminPassword(password, secret.value),
+    password_secret_version: secret.version,
+    nickname: nickname || username,
+    // 数组形式是 uni-id 2.x 的写法；requireAdmin 两种形式都认
+    role: [ROLE.ADMIN],
+    status: 0,
+    // 不写 dcloud_appid = 全局账号，管理后台 H5 和小程序都能登录
+    register_date: now,
+    register_env: {
+      appid: '',
+      uni_platform: 'admin',
+      os_name: '',
+      app_name: '校递达管理后台',
+      app_version: '',
+      app_version_code: '',
+      channel: '',
+      client_ip: ''
+    }
+  }
+  const added = await db.collection('uni-id-users').add(doc)
+  const uid = added.id
+
+  // 扩展资料：让后台用户列表里也能看到这个人的身份
+  try {
+    await ensureProfile(uid, { role: ROLE.ADMIN, nickname: doc.nickname })
+  } catch (e) {
+    // 扩展表写失败不影响登录，只是后台列表少了条资料
+  }
+
+  return { uid: uid, username: username, nickname: doc.nickname }
+}
+
+/**
+ * 撤销管理员。
+ * 两道闸：不能撤销自己（避免把自己锁在外面）；至少留一个管理员（避免没人能进后台）。
+ */
+async function revokeAdmin(targetUid, actorUid) {
+  const uid = String(targetUid || '')
+  assert(uid, 400, '缺少用户ID')
+  assert(uid !== String(actorUid || ''), 400, '不能撤销自己的管理员权限')
+
+  const admins = await listAdmins()
+  const target = admins.list.filter((a) => a._id === uid)[0]
+  assert(target, 404, '该账号不是管理员')
+  assert(admins.list.length > 1, 400, '至少要保留一个管理员')
+
+  await db.collection('uni-id-users').doc(uid).update({ role: [] })
+  try {
+    await db.collection(COLL.users).doc(uid).update({ role: ROLE.USER, update_time: Date.now() })
+  } catch (e) {
+    // 没有扩展资料也没关系
+  }
+  return { uid: uid, username: target.username }
+}
+
 module.exports = {
   db,
   dbCmd,
@@ -2628,5 +2796,12 @@ module.exports = {
   checkText,
   flagImage,
   wxOpenidOf,
-  recordModeration
+  recordModeration,
+  // 管理员账号（v1.2.0）
+  listAdmins,
+  createAdminAccount,
+  revokeAdmin,
+  hashAdminPassword,
+  verifyAdminPassword,
+  PWD_PREFIX
 }
