@@ -18,6 +18,7 @@
 					<uni-th align="center" width="130">昵称</uni-th>
 					<uni-th align="center" width="130">真实姓名</uni-th>
 					<uni-th align="center" width="190">学号</uni-th>
+					<uni-th align="center" width="110">学籍截图</uni-th>
 					<uni-th align="center" width="140">手机号</uni-th>
 					<uni-th align="center" width="160">申请时间</uni-th>
 					<uni-th align="center" width="100">状态</uni-th>
@@ -34,6 +35,14 @@
 							<text class="stu-parts">{{ item.student_no_display }}</text>
 						</view>
 						<text v-else class="stu-bad">未填写</text>
+					</uni-td>
+					<uni-td align="center">
+						<view v-if="item.student_proof_thumb" class="proof-cell" @click="openProof(item)">
+							<image :src="item.student_proof_thumb" class="proof-thumb" mode="aspectFill" />
+							<text class="proof-link">看大图</text>
+						</view>
+						<text v-else-if="item.student_proof" class="proof-link" @click="openProof(item)">查看</text>
+						<text v-else class="proof-missing">未上传</text>
 					</uni-td>
 					<uni-td align="center">{{ item.mobile || '-' }}</uni-td>
 					<uni-td align="center">{{ formatTime(item.rider_apply_time) }}</uni-td>
@@ -156,6 +165,26 @@
 				const d = new Date(n)
 				const p = (v) => String(v).padStart(2, '0')
 				return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+			},
+			/**
+			 * 看学籍截图。
+			 * 先用列表里的缩略图立刻弹出（无等待），再后台拉原图替换——
+			 * 缩略图是客户端压的，小字可能糊；审核核对学号姓名要看原图。
+			 */
+			async openProof(item) {
+				const thumb = item.student_proof_thumb || ''
+				if (thumb) uni.previewImage({ urls: [thumb] })
+				uni.showLoading({ title: '加载原图', mask: false })
+				try {
+					const res = await api().readRiderProof({ userId: item._id })
+					const url = res && res.code === 0 && res.data && res.data.dataUri
+					if (url) uni.previewImage({ urls: [url], current: url })
+					else if (!thumb) uni.showToast({ title: (res && res.msg) || '没有截图', icon: 'none' })
+				} catch (e) {
+					if (!thumb) uni.showToast({ title: (e && e.message) || '原图加载失败', icon: 'none' })
+				} finally {
+					uni.hideLoading()
+				}
 			}
 		}
 	}
@@ -214,6 +243,30 @@
 		white-space: nowrap;
 	}
 	.stu-bad {
+		font-size: 12px;
+		color: #c62828;
+	}
+	/* 学籍截图缩略图：竖版手机截图，给一个窄高的框 */
+	.proof-cell {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		cursor: pointer;
+	}
+	.proof-thumb {
+		width: 54px;
+		height: 72px;
+		border-radius: 4px;
+		border: 1px solid #e5e5ea;
+		background: #f2f2f7;
+	}
+	.proof-link {
+		margin-top: 4px;
+		font-size: 12px;
+		color: #007aff;
+		cursor: pointer;
+	}
+	.proof-missing {
 		font-size: 12px;
 		color: #c62828;
 	}

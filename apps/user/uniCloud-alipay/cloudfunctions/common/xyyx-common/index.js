@@ -890,6 +890,9 @@ function myProfile(profile) {
     rider_status: profile.rider_status || 0,
     rider_status_text: ['未申请', '审核中', '已通过', '已拒绝'][profile.rider_status || 0] || '未申请',
     rider_reject_reason: profile.rider_reject_reason || '',
+    // 学籍截图：只回给本人（申请页要能显示「已经传过哪张」），后台走 admin.listRiders
+    student_proof: profile.student_proof || '',
+    student_proof_thumb: profile.student_proof_thumb || '',
     rating: profile.rating || 5,
     rating_count: profile.rating_count || 0,
     published_count: profile.published_count || 0,

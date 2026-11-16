@@ -104,6 +104,17 @@ const api = {
     const mobile = C.str(data.mobile, { max: 11, name: '手机号', required: true })
     C.assert(/^1\d{10}$/.test(mobile), 400, '手机号格式不对')
 
+    // 学籍截图：审核要核对「学号 + 姓名」是不是本人，光有数字不够。
+    // 缩略图用 lenient：超限就丢掉缩略图，但 fileID 必须存下来（后台还能读原图），
+    // 不能因为一张缩略图让整个申请提交失败。
+    const proof = C.str(data.student_proof, { max: 500, name: '学籍截图' })
+    C.assert(proof, 400, '请上传学籍信息截图（教学一体化平台 → 信息查询 → 查询个人信息）')
+    const proofThumb = C.imageThumb(data.student_proof_thumb, {
+      name: '学籍截图缩略图',
+      max: 180000,
+      lenient: true
+    })
+
     const profile = await C.ensureProfile(auth.uid)
     C.assert((profile.rider_status || 0) !== 2, 400, '你已经是骑手了')
 
@@ -112,6 +123,8 @@ const api = {
       student_no: studentNo,
       student_info: C.parseStudentNo(studentNo),
       mobile,
+      student_proof: proof,
+      student_proof_thumb: proofThumb,
       rider_status: 1,
       rider_apply_time: Date.now(),
       rider_reject_reason: ''
@@ -154,6 +167,16 @@ const api = {
       rider_info_update_time: Date.now()
     }
     if (mobile) patch.mobile = mobile
+    // 换截图是可选的：不传就保留原来那张（老骑手不该被逼着重传）
+    const proof = C.str(data.student_proof, { max: 500, name: '学籍截图' })
+    if (proof) {
+      patch.student_proof = proof
+      patch.student_proof_thumb = C.imageThumb(data.student_proof_thumb, {
+        name: '学籍截图缩略图',
+        max: 180000,
+        lenient: true
+      })
+    }
     await C.ensureProfile(auth.uid, patch)
 
     return C.ok(C.parseStudentNo(studentNo), '认证信息已更新')

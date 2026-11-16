@@ -572,10 +572,15 @@ const api = {
     const pageSize = C.int(params.pageSize || 20, { min: 1, max: 100, name: '每页条数' })
 
     const where = status ? { rider_status: status } : { rider_status: C.dbCmd.in([1, 2, 3]) }
-    const res = await C.db.collection(C.COLL.users)
+    const col = C.db.collection(C.COLL.users)
+    // 分页下推到数据库：之前是「一次取 1000 条再切片」，
+    // 现在每条还带一张学籍截图缩略图（~100KB），全量拉会把云函数内存顶爆。
+    const countRes = await col.where(where).count()
+    const res = await col
       .where(where)
       .orderBy('rider_apply_time', 'desc')
-      .limit(1000)
+      .skip((page - 1) * pageSize)
+      .limit(pageSize)
       .get()
     const rows = (res.data || []).map((p) => {
       const student = C.parseStudentNo(p.student_no)
@@ -587,6 +592,9 @@ const api = {
         student_no: student.digits,
         student_no_display: student.display,
         student_no_valid: student.valid,
+        // 学籍截图：缩略图直接画在列表里；点开再看原图（readRiderProof）
+        student_proof: p.student_proof || '',
+        student_proof_thumb: p.student_proof_thumb || '',
         rider_status: p.rider_status || 0,
         rider_status_text: RIDER_STATUS_TEXT[p.rider_status || 0] || '未申请',
         rider_apply_time: timeOf(p.rider_apply_time),
@@ -594,14 +602,43 @@ const api = {
         rider_reject_reason: p.rider_reject_reason || ''
       }
     })
-    const total = rows.length
-    const start = (page - 1) * pageSize
     return C.ok({
-      list: rows.slice(start, start + pageSize),
-      total,
+      list: rows,
+      total: Number(countRes.total) || 0,
       page,
       pageSize
     })
+  },
+
+  /**
+   * 读某个骑手申请的原图（学籍截图），返回 data URI 给后台直接画。
+   * 为什么要这个：缩略图是客户端压的，字可能糊；审核要看清学号和姓名就得看原图。
+   * 云存储临时链接会过期、还要配域名，所以走和客户端看图同一条「分片读库」的路。
+   */
+  async readRiderProof(params = {}) {
+    await C.requireAdmin(this)
+    const userId = C.str(params.userId || params._id, { min: 1, max: 64, name: '用户ID', required: true })
+    const res = await C.db.collection(C.COLL.users).doc(userId).get()
+    const p = (res.data && res.data[0]) || null
+    C.assert(p, 404, '用户不存在')
+    const fileID = String(p.student_proof || '')
+    C.assert(fileID, 404, '该申请没有上传学籍截图')
+
+    const parts = []
+    let offset = 0
+    let mime = 'image/jpeg'
+    for (let i = 0; i < 40; i++) {
+      const chunk = await C.imageDataOf(fileID, offset)
+      if (!chunk || !chunk.base64) break
+      parts.push(chunk.base64)
+      if (chunk.mime) mime = chunk.mime
+      if (chunk.done === undefined || chunk.done) break
+      const next = Number(chunk.offset) + Number(chunk.chunk)
+      if (!Number.isFinite(next) || next <= offset) break
+      offset = next
+    }
+    C.assert(parts.length > 0, 500, '截图读取失败，可能已被清理')
+    return C.ok({ dataUri: 'data:' + mime + ';base64,' + parts.join('') })
   },
 
   /**

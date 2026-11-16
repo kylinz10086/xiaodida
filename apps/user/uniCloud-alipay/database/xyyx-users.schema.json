@@ -27,6 +27,8 @@
       }
     },
     "rider_apply_time": { "bsonType": "timestamp", "description": "申请成为骑手的时间" },
+    "student_proof": { "bsonType": "string", "maxLength": 500, "description": "学籍信息截图（云存储 fileID）：教学一体化平台→信息查询→查询个人信息，用于核验学号与姓名是否本人" },
+    "student_proof_thumb": { "bsonType": "string", "maxLength": 190000, "description": "学籍截图缩略图（data URI，1080px）：后台审核列表直接画，不依赖云存储临时链接" },
     "rider_approved_time": { "bsonType": "timestamp", "description": "审核通过时间" },
     "rider_review_time": { "bsonType": "timestamp", "description": "最近一次审核时间" },
     "rider_review_by": { "bsonType": "string", "description": "审核人 uid" },

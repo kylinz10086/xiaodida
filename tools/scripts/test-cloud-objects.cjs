@@ -472,18 +472,33 @@ async function main() {
   codeIs('骑手资料：学号过短', await call(riderObj, RIDER1, 'applyRider', { real_name: '王小明', student_no: '123', mobile: '13900001111' }), 400)
   codeIs('骑手资料：手机号错', await call(riderObj, RIDER1, 'applyRider', { real_name: '王小明', student_no: '202512211404009', mobile: '123' }), 400)
 
-  const apply1 = await call(riderObj, RIDER1, 'applyRider', { real_name: '王小明', student_no: '202512211404009', mobile: '13900001111' })
+  // 1.2.6 起必须带学籍截图（审核要核对学号+姓名是不是本人）
+  codeIs(
+    '缺学籍截图被拒',
+    await call(riderObj, RIDER1, 'applyRider', { real_name: '王小明', student_no: '202512211404009', mobile: '13900001111' }),
+    400
+  )
+
+  const FAKE_PROOF = 'cloud://test/student-proof/x.jpg'
+  const apply1 = await call(riderObj, RIDER1, 'applyRider', {
+    real_name: '王小明',
+    student_no: '202512211404009',
+    mobile: '13900001111',
+    student_proof: FAKE_PROOF,
+    student_proof_thumb: 'data:image/jpeg;base64,/9j/AAAA'
+  })
   codeIs('第一个骑手申请', apply1, 0)
   ok('冷启动自动通过', apply1.data.status === 2 && apply1.data.auto === true)
+  ok('学籍截图已落库', tableRows(C.COLL.users).find((u) => u._id === RIDER1).student_proof === FAKE_PROOF)
 
-  const applyAgain = await call(riderObj, RIDER1, 'applyRider', { real_name: '王小明', student_no: '202512211404009', mobile: '13900001111' })
+  const applyAgain = await call(riderObj, RIDER1, 'applyRider', { real_name: '王小明', student_no: '202512211404009', mobile: '13900001111', student_proof: FAKE_PROOF })
   codeIs('已通过再申请', applyAgain, 400)
   codeIs('骑手改资料', await call(riderObj, RIDER1, 'updateProfile', { nickname: '骑手昵称' }), 0)
   ok('骑手昵称已更新', tableRows(C.COLL.users).find((u) => u._id === RIDER1).nickname === '骑手昵称')
   codeIs('骑手同意协议', await call(riderObj, RIDER1, 'acceptAgreement', { version: '1.0.0' }), 0)
   ok('骑手协议留痕', tableRows(C.COLL.agreements).some((a) => a.user_id === RIDER1 && a.role === 'rider'))
 
-  const apply2 = await call(riderObj, RIDER2, 'applyRider', { real_name: '李小红', student_no: '202512211404010', mobile: '13900002222' })
+  const apply2 = await call(riderObj, RIDER2, 'applyRider', { real_name: '李小红', student_no: '202512211404010', mobile: '13900002222', student_proof: FAKE_PROOF })
   codeIs('第二个骑手申请', apply2, 0)
   ok('第二个进入审核中', apply2.data.status === 1)
 

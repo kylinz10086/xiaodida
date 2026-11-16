@@ -25,7 +25,7 @@
 		<view class="profile-helper" v-if="showProfileHelper" @click="editField('nickname')">
 			<view class="helper-main">
 				<text class="helper-title">把资料补一下</text>
-				<text class="helper-desc">设置头像和昵称，骑手和同学更容易认出你。</text>
+				<text class="helper-desc">设置头像和昵称。</text>
 			</view>
 			<view class="helper-actions">
 				<text class="helper-btn" @click.stop="editField('nickname')">昵称</text>

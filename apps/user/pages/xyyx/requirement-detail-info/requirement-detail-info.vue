@@ -246,6 +246,10 @@
 
 		<view class="action-section" v-else>
 			<view class="action-btn cancel" @click="goBack">返回</view>
+			<!-- 大厅 / 分享进来的待接单：审核通过的骑手可以直接在这里接单 -->
+			<view class="action-btn complete" v-if="canGrab" :class="{ disabled: grabbing }" @click="pickOrder">
+				{{ grabbing ? '接单中…' : '接单' }}
+			</view>
 		</view>
 
 		<!-- 评价弹层：1-5 星 + 快捷标签 + 200 字 -->
@@ -274,7 +278,7 @@
 
 <script>
 	import { mapGetters, mapActions } from 'vuex';
-	import { navigateTo, fmtMoney } from '@/common/rider-util.js';
+	import { navigateTo, fmtMoney, errText } from '@/common/rider-util.js';
 	import { resolveImageSrc } from '@/common/image.js';
 
 	export default {
@@ -291,6 +295,8 @@
 				reviewContent: '',
 				submittingReview: false,
 				reviewedLocal: false,
+				/** 详情页接单：按钮 loading + 防连点 */
+				grabbing: false,
 				reviewTagOptions: ['准时', '态度好', '包装完好', '沟通及时']
 			};
 		},
@@ -311,6 +317,19 @@
 				// 单量太少时不展示 5.0，避免「新骑手」看起来像满分老手
 				const ratingText = count < 3 ? '新骑手' : rating.toFixed(1) + ' 分';
 				return ratingText + ' · 已完成 ' + count + ' 单';
+			},
+			/**
+			 * 详情页能不能接单：
+			 *   1. 订单是「待接单」；
+			 *   2. 我不是发布者、也不是已接单的骑手（那两种身份有自己的按钮）；
+			 *   3. 我是审核通过的骑手（rider_status === 2，以服务端资料为准）。
+			 */
+			canGrab() {
+				const t = this.taskData || {};
+				if (Number(t.status) !== 1) return false;
+				if (t.role === 'publisher' || t.role === 'runner') return false;
+				const p = this.$store.getters.getUserInfo || {};
+				return Number(p.rider_status) === 2;
 			}
 		},
 		onLoad(option) {
@@ -477,14 +496,24 @@
 					navigateTo(this.taskData.origin, '取件点');
 				}
 			},
-			pickOrder() {
-				if (!this.taskId) return;
-				this.acceptTask({ taskId: this.taskId }).then(() => {
-					uni.showToast({ duration: 1500, icon: 'success', title: '接单成功！', mask: true });
-					setTimeout(() => { uni.switchTab({ url: '/pages/xyyx/order/order' }); }, 1500);
-				}).catch(err => {
-					uni.showToast({ title: err.message || '接单失败', icon: 'none', duration: 2000 });
-				});
+			async pickOrder() {
+				if (!this.taskId || this.grabbing) return;
+				this.grabbing = true;
+				try {
+					// 和骑手工作台、大厅卡片走同一条链路（限流 / CAS / 字段裁剪都在服务端）
+					await this.$store.dispatch('rider/grabTask', this.taskId);
+					uni.showToast({ duration: 1200, icon: 'success', title: '接单成功', mask: true });
+					// 直接进骑手详情页，下一步就是取件/送达
+					setTimeout(() => {
+						uni.redirectTo({ url: '/pages/rider/detail?id=' + this.taskId });
+					}, 700);
+				} catch (e) {
+					// 409 手慢了 / 429 限流：用服务端文案，并把详情刷新成最新状态
+					uni.showToast({ title: errText(e, '接单失败'), icon: 'none', duration: 2000 });
+					this.$store.dispatch('fetchDetail', this.taskId).catch(() => {});
+				} finally {
+					this.grabbing = false;
+				}
 			},
 			handleCompleteOrder() {
 				uni.showModal({
