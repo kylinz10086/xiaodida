@@ -38,7 +38,8 @@
 				<view class="tl" :class="{ on: !!taskData.picked_time }">
 					<text class="tl-dot"></text>
 					<view class="tl-main">
-						<text class="tl-title">已取件</text>
+						<!-- 和「未接单」一致：没发生的事别写「已X」，否则和下面那句提示自相矛盾 -->
+						<text class="tl-title">{{ taskData.picked_time ? '已取件' : '未取件' }}</text>
 						<text class="tl-time">{{ taskData.picked_time ? formatTime(taskData.picked_time) : '骑手取件后会更新' }}</text>
 						<image v-if="taskData.pick_proof" class="proof-img" :src="imageUrl(taskData.pick_proof)"
 							mode="aspectFill" @click="previewProof(taskData.pick_proof)"></image>
@@ -47,7 +48,7 @@
 				<view class="tl" :class="{ on: !!taskData.delivered_time }">
 					<text class="tl-dot"></text>
 					<view class="tl-main">
-						<text class="tl-title">已送达</text>
+						<text class="tl-title">{{ taskData.delivered_time ? '已送达' : '未送达' }}</text>
 						<text class="tl-time">{{ taskData.delivered_time ? formatTime(taskData.delivered_time) : '等待送达' }}</text>
 						<image v-if="taskData.deliver_proof" class="proof-img" :src="imageUrl(taskData.deliver_proof)"
 							mode="aspectFill" @click="previewProof(taskData.deliver_proof)"></image>
@@ -56,7 +57,7 @@
 				<view class="tl" :class="{ on: taskData.status === 3 }">
 					<text class="tl-dot"></text>
 					<view class="tl-main">
-						<text class="tl-title">已完成</text>
+						<text class="tl-title">{{ taskData.status === 3 ? '已完成' : '未完成' }}</text>
 						<text class="tl-time">{{ taskData.complete_time ? formatTime(taskData.complete_time) : '送达后自动结算' }}</text>
 					</view>
 				</view>
