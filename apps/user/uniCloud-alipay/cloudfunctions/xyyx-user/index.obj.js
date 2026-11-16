@@ -693,6 +693,21 @@ const api = {
     return C.ok(await C.chatConversations(auth.uid))
   },
 
+  /* ---------------- 合并会话（按「人」，跨订单） ---------------- */
+
+  /** 和某人的全部对话（跨我们之间的所有订单，一条时间线） */
+  async getChatThread(peerId, opts = {}) {
+    const auth = await C.requireAuth(this)
+    return C.ok(await C.chatThreadWithPeer(C.str(peerId, { min: 1, max: 64, name: '对方', required: true }), auth, opts))
+  },
+
+  async sendChatThread(peerId, content, meta = {}, type = 'text', thumb = '') {
+    const auth = await C.requireAuth(this)
+    await C.checkNonce(auth, meta.nonce, meta.timestamp)
+    const pid = C.str(peerId, { min: 1, max: 64, name: '对方', required: true })
+    return C.ok(await C.chatSendToPeer(pid, auth, content, { type, thumb }), '已发送')
+  },
+
   /* ---------------- 协议 ---------------- */
 
   async acceptAgreement(data = {}) {

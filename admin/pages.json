@@ -311,6 +311,12 @@
 					}
 				},
 				{
+					"path": "feedback/list",
+					"style": {
+						"navigationBarTitleText": "意见反馈"
+					}
+				},
+				{
 					"path": "settings/settings",
 					"style": {
 						"navigationBarTitleText": "系统设置"

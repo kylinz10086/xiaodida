@@ -1,7 +1,7 @@
 <template>
 	<view class="list-page">
 		<view class="list" v-if="conversations.length">
-			<view class="conv" v-for="c in conversations" :key="c.task_id" @click="openChat(c)">
+			<view class="conv" v-for="c in conversations" :key="convKey(c)" @click="openChat(c)">
 				<view class="conv-avatar" :style="{ background: colorOf(c.peer && c.peer.nickname) }">
 					<image v-if="avatarOf(c.peer)" class="conv-avatar-img" :src="avatarOf(c.peer)" mode="aspectFill"></image>
 					<text v-else>{{ initial(c.peer && c.peer.nickname) }}</text>
@@ -89,7 +89,16 @@
 					this.timer = null
 				}
 			},
+			/** 小程序端 :key 不支持 || 表达式，统一在这里算 */
+			convKey(c) {
+				return (c && (c.peer_id || c.task_id)) || ''
+			},
 			openChat(c) {
+				// 按「人」进会话：同两个人的多个订单合并成一条时间线
+				if (c.peer_id) {
+					uni.navigateTo({ url: '/pages/chat/chat?peer=' + c.peer_id + '&role=' + this.role })
+					return
+				}
 				uni.navigateTo({ url: '/pages/chat/chat?taskId=' + c.task_id + '&role=' + this.role })
 			},
 			lastText(c) {

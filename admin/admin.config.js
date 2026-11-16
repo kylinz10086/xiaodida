@@ -103,6 +103,11 @@ export default {
 				text: '提现记录',
 				value: '/pages/xyyx/withdrawals/list'
 			}, {
+				menu_id: "xyyx-feedback",
+				icon: 'admin-icons-paperplane',
+				text: '意见反馈',
+				value: '/pages/xyyx/feedback/list'
+			}, {
 				menu_id: "xyyx-settings",
 				icon: 'admin-icons-gear',
 				text: '系统设置',

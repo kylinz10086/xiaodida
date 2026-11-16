@@ -101,6 +101,7 @@
 		data() {
 			return {
 				taskId: '',
+				peerId: '',
 				role: 'user',
 				me: '',
 				peer: {},
@@ -147,16 +148,18 @@
 			}
 		},		onLoad(query) {
 			this.taskId = (query && query.taskId) || ''
+			// 合并会话模式：传 peer，按「人」拉全部订单的消息
+			this.peerId = (query && query.peer) || ''
 			this.role = query && query.role === 'rider' ? 'rider' : 'user'
-			if (!this.taskId) {
-				uni.showToast({ title: '缺少订单号', icon: 'none' })
+			if (!this.taskId && !this.peerId) {
+				uni.showToast({ title: '缺少会话参数', icon: 'none' })
 				setTimeout(() => uni.navigateBack(), 800)
 				return
 			}
 			this.load()
 		},
 		onShow() {
-			if (this.taskId && this.me) {
+			if ((this.taskId || this.peerId) && this.me) {
 				this.load()
 				this.startPolling()
 			}
@@ -181,7 +184,9 @@
 				if (this.loading) return
 				this.loading = true
 				try {
-					const res = await this.api().getChat(this.taskId)
+					const res = this.peerId
+						? await this.api().getChatThread(this.peerId)
+						: await this.api().getChat(this.taskId)
 					if (res.code !== 0) throw new Error(res.msg)
 					const d = res.data || {}
 					this.me = d.me || ''
@@ -203,7 +208,9 @@
 				if (this.loading || this.sending) return
 				const last = this.messages.length ? this.messages[this.messages.length - 1].create_time : 0
 				try {
-					const res = await this.api().getChat(this.taskId, { after: last })
+					const res = this.peerId
+						? await this.api().getChatThread(this.peerId, { after: last })
+						: await this.api().getChat(this.taskId, { after: last })
 					if (res.code !== 0) return
 					const list = (res.data && res.data.list) || []
 					if (!list.length) return
@@ -346,7 +353,10 @@
 				})
 				this.scrollToBottom()
 				try {
-					const res = await this.api().sendChat(this.taskId, content, this.meta(), type, thumb || '')
+					// 合并会话（按人）走 sendChatThread，单订单会话仍走 sendChat
+					const res = this.peerId
+						? await this.api().sendChatThread(this.peerId, content, this.meta(), type, thumb || '')
+						: await this.api().sendChat(this.taskId, content, this.meta(), type, thumb || '')
 					if (res.code !== 0) throw new Error(res.msg)
 					const saved = res.data || {}
 					const i = this.messages.findIndex((m) => m._id === tempId)
@@ -431,10 +441,13 @@
 				return colors[sum % colors.length]
 			},
 			goTask() {
+				// 合并会话里没有「这一单」，用最后一单的 id 兜底；取不到就不跳
+				const id = this.taskId || (this.task && this.task._id) || ''
+				if (!id) return
 				if (this.role === 'rider') {
-					uni.navigateTo({ url: '/pages/rider/detail?id=' + this.taskId })
+					uni.navigateTo({ url: '/pages/rider/detail?id=' + id })
 				} else {
-					uni.setStorageSync('currentViewTaskId', this.taskId)
+					uni.setStorageSync('currentViewTaskId', id)
 					uni.navigateTo({ url: '/pages/xyyx/requirement-detail-info/requirement-detail-info?type=completed' })
 				}
 			}

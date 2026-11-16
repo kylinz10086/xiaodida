@@ -57,7 +57,7 @@
 		<view class="card">
 			<view class="card-title">联系用户</view>
 			<block v-if="task.contact">
-				<view class="kv"><text class="k">手机号</text><text class="v r-mono">{{ task.contact.mobile || task.contact.mobile_masked || '—' }}</text></view>
+				<view class="kv"><text class="k">手机号</text><text class="v r-mono">{{ task.contact.mobile_masked || '—' }}</text></view>
 				<view class="kv" v-if="task.contact.wechat_id">
 					<text class="k">微信号</text><text class="v">{{ task.contact.wechat_id }}</text>
 				</view>
@@ -250,9 +250,28 @@
 				navigateTo(place, label)
 			},
 
-			call() {
+			async call() {
 				if (!this.task || !this.task.contact) return
-				callPhone(this.task.contact.mobile, '用户手机号：')
+				// 详情接口只给脱敏号。真正拨号时向服务端取一次完整号：
+				// 带限流（每小时 20 次）和 contact.reveal 审计，页面上始终不显示完整号码。
+				let phone = this.task.contact.mobile || ''
+				if (!phone) {
+					uni.showLoading({ title: '获取号码', mask: true })
+					try {
+						const res = await uniCloud
+							.importObject('xyyx-rider', { customUI: true })
+							.getTaskPhone(this.id)
+						if (!res || res.code !== 0) throw new Error((res && res.msg) || '获取号码失败')
+						phone = (res.data && res.data.mobile) || ''
+					} catch (e) {
+						uni.hideLoading()
+						uni.showToast({ title: (e && e.message) || '获取号码失败', icon: 'none' })
+						return
+					}
+					uni.hideLoading()
+				}
+				if (!phone) return uni.showToast({ title: '订单里没有手机号', icon: 'none' })
+				uni.makePhoneCall({ phoneNumber: phone, fail: () => {} })
 			},
 
 			copyWechat() {

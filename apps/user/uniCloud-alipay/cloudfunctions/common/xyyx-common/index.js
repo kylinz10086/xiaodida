@@ -841,9 +841,11 @@ function taskForRider(task, riderId, opts = {}) {
     complete_time: task.complete_time,
     auto_confirm_at: task.auto_confirm_at || 0,
     abandon_reason: task.abandon_reason || '',
-    // 关键隔离点：接单前没有任何联系方式；接单后给完整手机号（骑手要打电话）
+    // 关键隔离点：接单前没有任何联系方式；接单后**也只给脱敏号**。
+    // 完整号码只在骑手点「拨打电话」时由 getTaskPhone 单独取一次（带限流 + 审计），
+    // 免得详情页/截图/转发里到处是用户的完整手机号。
     contact: isRunner && accepted
-      ? { mobile: task.mobile || '', mobile_masked: maskMobile(task.mobile), wechat_id: task.wechat_id || '' }
+      ? { mobile: '', mobile_masked: maskMobile(task.mobile), wechat_id: task.wechat_id || '' }
       : null,
     mine: isRunner,
     /** 送达后是否还要等用户确认（false=送达即完成） */
@@ -2000,8 +2002,7 @@ async function chatMessages(task, auth, opts = {}) {
   }
 }
 
-async function chatUnread(task, uid) {
-  assertChatMember(task, uid)
+async function chatUnread(task, uid) {  assertChatMember(task, uid)
   const res = await db
     .collection(COLL.messages)
     .where({ task_id: task._id, to_id: uid, read_at: 0 })
@@ -2069,8 +2070,11 @@ async function chatSystem(task, content) {
 }
 
 /**
- * 会话列表：最近聊过的订单，按最后一条消息倒序。
- * 消息表里只存 task_id，所以这里再补一次订单和对方昵称。
+ * 会话列表：**按「人」聚合**。
+ *
+ * 1.2.9 之前是按订单分组，同一个人的两单会出两个会话（列表里两条一模一样的「微信用户」）。
+ * 现在同两个人只出一条：取最近一条消息当摘要，未读数按对方汇总，标题显示「共 N 个订单」。
+ * 点进去走 chatThreadWithPeer，把所有共同订单的消息拉到一条时间线上。
  */
 async function chatConversations(uid, limit = 30) {
   const fromRes = await db
@@ -2087,52 +2091,196 @@ async function chatConversations(uid, limit = 30) {
     .get()
 
   const rows = [...(fromRes.data || []), ...(toRes.data || [])]
-  const latest = new Map()
+  const byPeer = new Map()
   for (const m of rows) {
-    const cur = latest.get(m.task_id)
-    if (!cur || m.create_time > cur.create_time) latest.set(m.task_id, m)
+    if (!m.task_id) continue
+    const peerId = m.from_id === uid ? m.to_id : m.from_id
+    // 系统提示不是「人」，不单独成会话
+    if (!peerId || peerId === 'system' || peerId === uid) continue
+    const cur = byPeer.get(peerId)
+    if (!cur) {
+      byPeer.set(peerId, { last: m, taskIds: new Set([m.task_id]) })
+    } else {
+      cur.taskIds.add(m.task_id)
+      if (Number(m.create_time) > Number(cur.last.create_time)) cur.last = m
+    }
   }
 
-  const taskIds = Array.from(latest.keys()).slice(0, limit)
-  if (!taskIds.length) return { list: [] }
+  const peerIds = Array.from(byPeer.keys()).slice(0, limit)
+  if (!peerIds.length) return { list: [] }
 
+  // 一次性把这批人涉及到的订单都取出来（标题/状态用）
+  const allTaskIds = []
+  for (const pid of peerIds) {
+    byPeer.get(pid).taskIds.forEach((id) => {
+      if (allTaskIds.indexOf(id) < 0) allTaskIds.push(id)
+    })
+  }
   const taskRes = await db
     .collection(COLL.tasks)
-    .where({ _id: dbCmd.in(taskIds) })
+    .where({ _id: dbCmd.in(allTaskIds.slice(0, 200)) })
     .get()
   const taskMap = new Map((taskRes.data || []).map((t) => [t._id, t]))
 
   const list = []
-  for (const id of taskIds) {
-    const task = taskMap.get(id)
-    if (!task) continue
-    if (task.publisher_id !== uid && task.runner_id !== uid) continue
-    const peerId = task.publisher_id === uid ? task.runner_id : task.publisher_id
-    if (!peerId) continue
-    const last = latest.get(id)
+  for (const pid of peerIds) {
+    const cur = byPeer.get(pid)
+    const ids = Array.from(cur.taskIds)
+    const tasks = ids.map((id) => taskMap.get(id)).filter(Boolean)
+    if (!tasks.length) continue
+    // 未读按「这个人发给我、我没读」汇总，不按订单拆
     const unreadRes = await db
       .collection(COLL.messages)
-      .where({ task_id: id, to_id: uid, read_at: 0 })
+      .where({ from_id: pid, to_id: uid, read_at: 0 })
       .count()
-    const peer = await chatPeerInfo(task, peerId)
+    const profile = await ensureProfile(pid).catch(() => ({}))
+    const lastTask = taskMap.get(cur.last.task_id) || tasks[0]
     list.push({
-      task_id: id,
-      title: task.title,
-      status: task.status,
-      status_text: STATUS_TEXT[task.status] || '',
-      peer,
+      task_id: cur.last.task_id,
+      peer_id: pid,
+      title: tasks.length > 1 ? '共 ' + tasks.length + ' 个订单' : (lastTask && lastTask.title) || '订单沟通',
+      task_count: tasks.length,
+      task_ids: ids,
+      peer: {
+        _id: pid,
+        nickname: profile.nickname || (lastTask && (lastTask.runner_id === pid ? lastTask.runner_nickname : lastTask.publisher_nickname)) || '对方',
+        avatar: profile.avatar || (lastTask && (lastTask.runner_id === pid ? lastTask.runner_avatar : lastTask.publisher_avatar)) || ''
+      },
       last: {
-        content: (last && last.content) || '',
-        type: (last && last.type) || 'text',
-        create_time: (last && last.create_time) || 0,
-        from_me: !!(last && last.from_id === uid)
+        content: (cur.last && cur.last.content) || '',
+        type: (cur.last && cur.last.type) || 'text',
+        create_time: (cur.last && cur.last.create_time) || 0,
+        from_me: !!(cur.last && cur.last.from_id === uid)
       },
       unread: unreadRes.total || 0
     })
   }
-
   list.sort((a, b) => (b.last.create_time || 0) - (a.last.create_time || 0))
   return { list }
+}
+
+/* ---------------- 联系方式：骑手拨号 ---------------- */
+
+/**
+ * 骑手取「本次拨号」用的完整手机号。
+ *
+ * 为什么单独做一个接口：详情接口现在只下发脱敏号（不再把完整号写进页面/日志/截图），
+ * 但骑手确实要打电话。所以点「拨打电话」时取一次，带限流和审计，用完即弃。
+ */
+async function revealTaskPhone(task, auth) {
+  const uid = auth.uid
+  assert(task, 404, '订单不存在')
+  assert(task.runner_id === uid, 403, '这不是你的单')
+  assert(
+    task.status === STATUS.ONGOING || task.status === STATUS.DONE,
+    400,
+    '订单状态不允许拨号'
+  )
+  await rateLimit(auth, 'phone', 20, 60 * 60 * 1000)
+  const mobile = String(task.mobile || '')
+  assert(mobile, 404, '订单里没有手机号')
+  await audit(AUDIT_ACTION.CONTACT_REVEAL, auth, {
+    targetType: 'task',
+    targetId: task._id,
+    detail: { mobile: maskMobile(mobile) }
+  })
+  return { mobile: mobile, mobile_masked: maskMobile(mobile) }
+}
+
+/* ---------------- 合并会话（同两个人一条线） ---------------- */
+
+/** 我和某人之间的订单（我是发布者或骑手），按创建时间倒序 */
+async function sharedTasksWith(uid, peerId) {
+  const col = db.collection(COLL.tasks)
+  const asPub = await col
+    .where({ publisher_id: uid, runner_id: peerId })
+    .orderBy('create_time', 'desc')
+    .limit(50)
+    .get()
+  const asRun = await col
+    .where({ runner_id: uid, publisher_id: peerId })
+    .orderBy('create_time', 'desc')
+    .limit(50)
+    .get()
+  const seen = {}
+  const list = []
+  for (const t of [...(asPub.data || []), ...(asRun.data || [])]) {
+    if (seen[t._id]) continue
+    seen[t._id] = true
+    list.push(t)
+  }
+  list.sort((a, b) => (b.create_time || 0) - (a.create_time || 0))
+  return list
+}
+
+/** 合并会话的消息：只取「我和这个人」所有共同订单下的消息 */
+async function chatThreadWithPeer(peerId, auth, opts = {}) {
+  const uid = auth.uid
+  const pid = String(peerId || '')
+  assert(pid && pid !== uid, 400, '对方不正确')
+  const tasks = await sharedTasksWith(uid, pid)
+  assert(tasks.length, 403, '你们之间还没有可聊的订单')
+
+  const taskIds = tasks.map((t) => t._id)
+  const limit = int(opts.limit || 60, { min: 1, max: 100, name: '条数' })
+  const after = Number(opts.after) || 0
+
+  const where = { task_id: dbCmd.in(taskIds) }
+  if (after > 0) where.create_time = dbCmd.gt(after)
+  const base = db.collection(COLL.messages).where(where)
+  const res =
+    after > 0
+      ? await base.orderBy('create_time', 'asc').limit(limit).get()
+      : await base.orderBy('create_time', 'desc').limit(limit).get()
+  const rows = after > 0 ? res.data || [] : (res.data || []).slice().reverse()
+
+  await db
+    .collection(COLL.messages)
+    .where({ task_id: dbCmd.in(taskIds), to_id: uid, read_at: 0 })
+    .update({ read_at: Date.now() })
+
+  const taskMap = {}
+  for (const t of tasks) taskMap[t._id] = t
+  const profile = await ensureProfile(pid).catch(() => ({}))
+
+  return {
+    me: uid,
+    peer: { _id: pid, nickname: profile.nickname || '对方', avatar: profile.avatar || '' },
+    tasks: tasks.map((t) => ({
+      _id: t._id,
+      title: t.title,
+      status: t.status,
+      status_text: STATUS_TEXT[t.status] || ''
+    })),
+    task: {
+      _id: tasks[0]._id,
+      title: tasks.length > 1 ? '共 ' + tasks.length + ' 个订单' : tasks[0].title,
+      status: tasks[0].status,
+      status_text: STATUS_TEXT[tasks[0].status] || ''
+    },
+    list: rows.map((m) => ({
+      _id: m._id,
+      from_id: m.from_id,
+      content: m.content,
+      type: m.type || 'text',
+      thumb: m.thumb || '',
+      create_time: m.create_time,
+      read_at: m.read_at || 0,
+      // 合并后要能看出这条属于哪一单
+      task_id: m.task_id,
+      task_title: (taskMap[m.task_id] && taskMap[m.task_id].title) || ''
+    })),
+    unread: 0
+  }
+}
+
+/** 合并会话里发消息：优先挂到「进行中」的订单，没有就挂最近那单 */
+async function chatSendToPeer(peerId, auth, content, opts = {}) {
+  const tasks = await sharedTasksWith(auth.uid, String(peerId || ''))
+  assert(tasks.length, 403, '你们之间还没有可聊的订单')
+  const ongoing = tasks.filter((t) => t.status === STATUS.ONGOING)
+  const task = ongoing.length ? ongoing[0] : tasks[0]
+  return chatSend(task, auth, content, opts)
 }
 
 /* ================================================================== */
@@ -2157,7 +2305,9 @@ const AUDIT_ACTION = {
   CONTENT_RISKY: 'content.risky',
   ADMIN_CREATE: 'admin.create',
   ADMIN_REVOKE: 'admin.revoke',
-  ADMIN_UPDATE: 'admin.update'
+  ADMIN_UPDATE: 'admin.update',
+  CONTACT_REVEAL: 'contact.reveal',
+  FEEDBACK_MARK: 'feedback.mark'
 }
 
 /**
@@ -2818,6 +2968,11 @@ module.exports = {
   chatSend,
   chatSystem,
   chatConversations,
+  // 合并会话（同两个人一条线）+ 骑手拨号取号
+  chatThreadWithPeer,
+  chatSendToPeer,
+  sharedTasksWith,
+  revealTaskPhone,
   uploadImageBase64,
   imageDataOf,
   saveImageData,

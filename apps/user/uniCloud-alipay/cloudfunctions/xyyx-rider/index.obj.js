@@ -546,6 +546,30 @@ const api = {
     return C.ok(await C.chatConversations(auth.uid))
   },
 
+  /* ---------------- 合并会话（按「人」，跨订单） ---------------- */
+
+  async getChatThread(peerId, opts = {}) {
+    const auth = await C.requireAuth(this)
+    return C.ok(await C.chatThreadWithPeer(C.str(peerId, { min: 1, max: 64, name: '对方', required: true }), auth, opts))
+  },
+
+  async sendChatThread(peerId, content, meta = {}, type = 'text', thumb = '') {
+    const auth = await C.requireAuth(this)
+    await C.checkNonce(auth, meta.nonce, meta.timestamp)
+    const pid = C.str(peerId, { min: 1, max: 64, name: '对方', required: true })
+    return C.ok(await C.chatSendToPeer(pid, auth, content, { type, thumb }), '已发送')
+  },
+
+  /**
+   * 拨号用的完整手机号。
+   * 详情接口只给脱敏号（contact.mobile 恒为空），骑手点「拨打电话」时取一次。
+   */
+  async getTaskPhone(taskId) {
+    const auth = await C.requireAuth(this)
+    const task = await C.getTask(C.taskIdOf(taskId))
+    return C.ok(await C.revealTaskPhone(task, auth))
+  },
+
   /* ---------------- 协议 ---------------- */
 
   async acceptAgreement(data = {}) {

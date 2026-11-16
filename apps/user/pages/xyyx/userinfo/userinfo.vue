@@ -243,12 +243,15 @@ export default {
 			}
 		},
 
-		/** 微信新版拿不到真实昵称/头像时，才显示手动完善提示 */
+		/** 微信新版拿不到真实昵称/头像时，才显示手动完善提示；两个都设置过就隐藏 */
 		showProfileHelper() {
 			if (!this.loggedIn) return false
-			const nickname = this.userInfo.nickname || ''
-			const avatar = this.userInfo.avatar || ''
-			return nickname === '微信用户' || !avatar || avatar.indexOf('head1') >= 0
+			const nickname = String(this.userInfo.nickname || '').trim()
+			// 头像可能是存 small（avatar）或只有高清（avatar_hd），两个都要看
+			const avatar = this.userInfo.avatar || this.userInfo.avatar_hd || ''
+			const defaultNick = !nickname || nickname === '微信用户'
+			const noAvatar = !avatar || avatar.indexOf('head1') >= 0
+			return defaultNick || noAvatar
 		},
 
 		canConfirm() {

@@ -15,6 +15,8 @@ const C = require('xyyx-common')
 const UNI_USERS = 'uni-id-users'
 
 const RIDER_STATUS_TEXT = { 0: '未申请', 1: '待审核', 2: '已通过', 3: '已拒绝' }
+/** 意见反馈类型（与客户端 submitFeedback 的 type 对齐） */
+const FEEDBACK_TYPE_TEXT = { suggestion: '产品建议', complaint: '投诉', bug: '遇到问题', delete_account: '注销账号' }
 
 /** 退款进度 / 退款来源的展示文案 */
 const REFUND_STATUS_TEXT = { processing: '退款中', success: '已退款', failed: '退款失败' }
@@ -698,6 +700,61 @@ const api = {
     await C.requireAdmin(this)
     const data = await C.listAuditLogs(params)
     return C.ok(data)
+  },
+
+  /**
+   * 意见反馈列表
+   * params: { status: ''|'new'|'done', type, page, pageSize }
+   */
+  async listFeedback(params = {}) {
+    await C.requireAdmin(this)
+    const page = C.int(params.page || 1, { min: 1, max: 9999, name: '页码' })
+    const pageSize = C.int(params.pageSize || 20, { min: 1, max: 100, name: '每页条数' })
+    const where = { _id: C.dbCmd.exists(true) }
+    if (params.status) where.status = String(params.status)
+    if (params.type) where.type = String(params.type)
+
+    const col = C.db.collection('xyyx-feedback')
+    const countRes = await col.where(where).count()
+    const res = await col
+      .where(where)
+      .orderBy('create_time', 'desc')
+      .skip((page - 1) * pageSize)
+      .limit(pageSize)
+      .get()
+
+    const list = (res.data || []).map((f) => ({
+      _id: f._id,
+      user_id: f.user_id || '',
+      type: f.type || '',
+      type_text: FEEDBACK_TYPE_TEXT[f.type] || f.type || '',
+      content: f.content || '',
+      contact: f.contact || '',
+      status: f.status || 'new',
+      create_time: f.create_time || 0,
+      time_text: f.create_time
+        ? new Date(Number(f.create_time) + 8 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 16)
+        : ''
+    }))
+    return C.ok({ list, total: Number(countRes.total) || 0, page, pageSize })
+  },
+
+  /** 标记反馈已处理 / 恢复待处理 */
+  async markFeedback(params = {}) {
+    const auth = await C.requireAdmin(this)
+    const id = C.str(params.id, { min: 1, max: 64, name: '反馈ID', required: true })
+    const status = params.status === 'done' ? 'done' : 'new'
+    await C.db.collection('xyyx-feedback').doc(id).update({
+      status: status,
+      update_time: Date.now(),
+      update_by: auth.uid
+    })
+    await C.audit(C.AUDIT_ACTION.FEEDBACK_MARK, auth, {
+      targetType: 'feedback',
+      targetId: id,
+      detail: { status: status }
+    })
+    return C.ok({ id: id, status: status }, status === 'done' ? '已标记处理' : '已恢复待处理')
   },
 
   /**
