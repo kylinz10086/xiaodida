@@ -33,7 +33,16 @@
 				<view class="time-info">
 					<text class="publish-time">{{item.timeText || item.time}}</text>
 				</view>
-				<view class="action-btn" @click.stop="clickMissionOrder(item)">查看</view>
+				<view class="btn-row">
+					<view class="action-btn ghost" @click.stop="clickMissionOrder(item)">查看</view>
+					<view
+						v-if="grabbable(item)"
+						class="action-btn grab"
+						:class="{ 'is-busy': busyId === item.id }"
+						@click.stop="clickGrab(item)">
+						{{ busyId === item.id ? '接单中…' : '接单' }}
+					</view>
+				</view>
 			</view>
 		</view>
 	</view>
@@ -41,17 +50,39 @@
 
 <script>
 	/**
-	 * 任务卡片（用户端）
+	 * 任务卡片（用户端大厅）
 	 *
-	 * 用户端只「看」不「抢」——抢单是骑手端的事，所以这里没有接单按钮。
+	 * 1.2.4 起大厅也支持接单：已通过审核的骑手在自己的主 App 里就能抢，
+	 * 不用再切到骑手端。是否显示按钮由父页面算好（grabMode），
+	 * 这里只负责「能不能点」的静态判断和把点击抛出去 ——
+	 * 真正抢单走 store/rider 的 grabTask（和骑手工作台同一条链路，
+	 * 限流、CAS、字段裁剪都在服务端）。
 	 */
 	import { fmtMoney } from '@/common/rider-util.js'
 
 	export default {
 		name: 'MissionListItem',
-		props: ['listData'],
+		props: {
+			listData: { type: Array, default: () => [] },
+			/** 是否允许接单（父页面：已登录 + 骑手审核通过） */
+			grabMode: { type: Boolean, default: false },
+			/** 正在接单的任务 id，用于按钮 loading 态 */
+			busyId: { type: String, default: '' },
+			/** 当前用户 id，用来隐藏自己发的单（服务端也会拦，这里只是别让人白点） */
+			selfId: { type: String, default: '' }
+		},
 		methods: {
 			money(v) { return fmtMoney(v) },
+			grabbable(item) {
+				if (!this.grabMode) return false
+				if (Number(item.status) !== 1) return false
+				if (this.selfId && item.publisherId && item.publisherId === this.selfId) return false
+				return true
+			},
+			clickGrab(item) {
+				if (this.busyId) return
+				this.$emit('grab', item)
+			},
 			clickMissionOrder(item) {
 				uni.setStorageSync('currentViewTaskId', item.id);
 				uni.navigateTo({
@@ -237,12 +268,33 @@
 		color: #8E8E93;
 	}
 	
+	.btn-row {
+		display: flex;
+		align-items: center;
+		gap: 12rpx;
+	}
+
 	.action-btn {
-		padding: 12rpx 40rpx;
+		padding: 12rpx 32rpx;
 		background-color: #007AFF;
 		color: #fff;
 		border-radius: 16rpx;
 		font-size: 26rpx;
 		font-weight: 500;
+	}
+
+	/* 「查看」做成次要按钮，让「接单」成为卡片上唯一的主操作 */
+	.action-btn.ghost {
+		background-color: #F2F2F7;
+		color: #007AFF;
+	}
+
+	.action-btn.grab {
+		background-color: #34C759;
+		padding: 12rpx 40rpx;
+	}
+
+	.action-btn.is-busy {
+		opacity: 0.6;
 	}
 </style>

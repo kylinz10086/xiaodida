@@ -59,7 +59,13 @@
 			<view v-if="loading" class="empty-tip"><text>加载中...</text></view>
 
 			<block v-else-if="orderList.length">
-				<mission-list-item :listData="orderList"></mission-list-item>
+				<mission-list-item
+					:listData="orderList"
+					:grab-mode="grabMode"
+					:busy-id="grabBusy"
+					:self-id="myId"
+					@grab="onGrab">
+				</mission-list-item>
 			</block>
 
 			<view v-else class="empty-card">
@@ -97,11 +103,28 @@
 	import WechatLoginModal from '@/components/wechat-login-modal/wechat-login-modal.vue'
 	import { isLoggedIn } from '@/common/auth.js'
 	import { AGREEMENT_VERSION } from '@/common/agreement.js'
+	import { fmtMoney, errText } from '@/common/rider-util.js'
 
 	export default {
 		components: { MissionListItem, WechatLoginModal },
 		computed: {
-			...mapGetters(['getTaskList', 'school']),
+			...mapGetters(['getTaskList', 'school', 'getUserInfo', 'commissionRate']),
+
+			/** 当前登录用户 id：用来把「自己发的单」排除掉接单按钮 */
+			myId() {
+				return (this.getUserInfo && this.getUserInfo._id) || ''
+			},
+
+			/** 骑手审核通过（2）才能接单；0/1/3 都只给「查看」 */
+			isRider() {
+				const p = this.getUserInfo || {}
+				return Number(p.rider_status) === 2
+			},
+
+			/** 已登录 + 骑手已通过 → 大厅卡片上出现「接单」 */
+			grabMode() {
+				return this.loggedIn && this.isRider
+			},
 
 			orderList() {
 				let list = (this.getTaskList || []).map((task) => ({
@@ -118,6 +141,7 @@
 					itemSize: task.itemSize,
 					timeOption: task.timeOption,
 					status: task.status,
+					publisherId: task.publisher_id || '',
 					createTime: task.create_time
 				}))
 
@@ -136,12 +160,58 @@
 			this.loggedIn = isLoggedIn()
 			this.checkAgreement()
 			this.loadTaskList()
+			// 刷新资料：决定大厅里要不要显示「接单」（以服务端 rider_status 为准）
+			if (this.loggedIn) this.fetchProfile().catch(() => {})
 		},
 		onPullDownRefresh() {
 			this.loadTaskList().finally(() => uni.stopPullDownRefresh())
 		},
 		methods: {
-			...mapActions(['fetchTaskList', 'acceptAgreement']),
+			...mapActions(['fetchTaskList', 'acceptAgreement', 'fetchProfile']),
+			...mapActions('rider', ['grabTask']),
+
+			/** 骑手实得（扣平台服务费），给确认框显示预期收入 */
+			incomeOf(item) {
+				const money = Number(item && item.money) || 0
+				return fmtMoney(money * (1 - (this.commissionRate || 0.08)))
+			},
+
+			/** 大厅接单：先二次确认，再走和骑手工作台同一条 grabTask 链路 */
+			onGrab(item) {
+				if (this.grabBusy) return
+				if (!this.loggedIn) {
+					this.showLoginModal = true
+					return
+				}
+				uni.showModal({
+					title: '确认接单',
+					content: `预计收入 ¥${this.incomeOf(item)}，接单后请尽快取件并按时送达。`,
+					confirmText: '接单',
+					confirmColor: '#34C759',
+					success: (res) => {
+						if (res.confirm) this.doGrab(item)
+					}
+				})
+			},
+
+			async doGrab(item) {
+				this.grabBusy = item.id
+				try {
+					await this.grabTask(item.id)
+					uni.showToast({ title: '接单成功', icon: 'success' })
+					await this.loadTaskList()
+					// 直接带去骑手详情页，下一步就是取件/送达
+					setTimeout(() => {
+						uni.navigateTo({ url: '/pages/rider/detail?id=' + item.id })
+					}, 500)
+				} catch (e) {
+					// 最常见的是 409「手慢了」和 429 限流，服务端文案已经很直白
+					uni.showToast({ title: errText(e, '接单失败'), icon: 'none' })
+					this.loadTaskList()
+				} finally {
+					this.grabBusy = ''
+				}
+			},
 
 			checkAgreement() {
 				if (uni.getStorageSync('agreed_version') === AGREEMENT_VERSION) return
@@ -230,7 +300,9 @@
 				pendingAction: null,
 				sortType: 'time',
 				sortOrder: 'desc',
-				loading: false
+				loading: false,
+				/** 正在接单的任务 id（按钮显示「接单中…」，同时防连点） */
+				grabBusy: ''
 			}
 		}
 	}
