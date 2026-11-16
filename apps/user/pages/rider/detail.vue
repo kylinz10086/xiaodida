@@ -56,9 +56,9 @@
 		<!-- 联系用户：接单后才给完整号码 -->
 		<view class="card">
 			<view class="card-title">联系用户</view>
-			<block v-if="task.contact">
-				<view class="kv"><text class="k">手机号</text><text class="v r-mono">{{ task.contact.mobile_masked || '—' }}</text></view>
-				<view class="kv" v-if="task.contact.wechat_id">
+			<block v-if="task.contact || task.mine">
+				<view class="kv"><text class="k">手机号</text><text class="v r-mono">{{ (task.contact && task.contact.mobile_masked) || '拨号时可见' }}</text></view>
+				<view class="kv" v-if="task.contact && task.contact.wechat_id">
 					<text class="k">微信号</text><text class="v">{{ task.contact.wechat_id }}</text>
 				</view>
 				<view class="contact-actions">
@@ -66,7 +66,7 @@
 					<view class="btn btn-ghost btn-sm" @click="goChat">
 						发消息<text class="chat-dot" v-if="chatUnread > 0">{{ chatUnread > 99 ? '99+' : chatUnread }}</text>
 					</view>
-					<view class="btn btn-ghost btn-sm" v-if="task.contact.wechat_id" @click="copyWechat">复制微信号</view>
+					<view class="btn btn-ghost btn-sm" v-if="task.contact && task.contact.wechat_id" @click="copyWechat">复制微信号</view>
 				</view>
 			</block>
 			<text class="muted r-small" v-else>接单后才能看到联系方式</text>
@@ -251,10 +251,10 @@
 			},
 
 			async call() {
-				if (!this.task || !this.task.contact) return
-				// 详情接口只给脱敏号。真正拨号时向服务端取一次完整号：
+				if (!this.task) return
+				// 详情接口只给脱敏号（contact.mobile 恒为空）。真正拨号时向服务端取一次完整号：
 				// 带限流（每小时 20 次）和 contact.reveal 审计，页面上始终不显示完整号码。
-				let phone = this.task.contact.mobile || ''
+				let phone = (this.task.contact && this.task.contact.mobile) || ''
 				if (!phone) {
 					uni.showLoading({ title: '获取号码', mask: true })
 					try {

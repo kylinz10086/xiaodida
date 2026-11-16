@@ -94,9 +94,13 @@
 				return (c && (c.peer_id || c.task_id)) || ''
 			},
 			openChat(c) {
-				// 按「人」进会话：同两个人的多个订单合并成一条时间线
+				// 按「人」进会话：同两个人的多个订单合并成一条时间线。
+				// 同时把最后一单的 taskId 也带上 —— 合并会话万一出错，
+				// 聊天页可以立刻退回「按订单」的老路径，不至于聊不了天。
 				if (c.peer_id) {
-					uni.navigateTo({ url: '/pages/chat/chat?peer=' + c.peer_id + '&role=' + this.role })
+					uni.navigateTo({
+						url: '/pages/chat/chat?peer=' + c.peer_id + '&taskId=' + (c.task_id || '') + '&role=' + this.role
+					})
 					return
 				}
 				uni.navigateTo({ url: '/pages/chat/chat?taskId=' + c.task_id + '&role=' + this.role })

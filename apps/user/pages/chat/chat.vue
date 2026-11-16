@@ -184,11 +184,26 @@
 				if (this.loading) return
 				this.loading = true
 				try {
-					const res = this.peerId
-						? await this.api().getChatThread(this.peerId)
-						: await this.api().getChat(this.taskId)
-					if (res.code !== 0) throw new Error(res.msg)
-					const d = res.data || {}
+					let d = null
+					if (this.peerId) {
+						try {
+							const res = await this.api().getChatThread(this.peerId)
+							if (res.code !== 0) throw new Error(res.msg || '合并会话加载失败')
+							d = res.data || {}
+						} catch (e) {
+							// 合并会话出错就退回「按订单」：聊天能不能用比合并更重要
+							if (!this.taskId) throw e
+							console.warn('[chat] 合并会话失败，降级为按订单：', (e && e.message) || e)
+							this.peerId = ''
+							const res2 = await this.api().getChat(this.taskId)
+							if (res2.code !== 0) throw new Error(res2.msg || '加载失败')
+							d = res2.data || {}
+						}
+					} else {
+						const res = await this.api().getChat(this.taskId)
+						if (res.code !== 0) throw new Error(res.msg || '加载失败')
+						d = res.data || {}
+					}
 					this.me = d.me || ''
 					this.peer = d.peer || {}
 					this.task = d.task || {}
@@ -353,11 +368,27 @@
 				})
 				this.scrollToBottom()
 				try {
-					// 合并会话（按人）走 sendChatThread，单订单会话仍走 sendChat
-					const res = this.peerId
-						? await this.api().sendChatThread(this.peerId, content, this.meta(), type, thumb || '')
-						: await this.api().sendChat(this.taskId, content, this.meta(), type, thumb || '')
-					if (res.code !== 0) throw new Error(res.msg)
+					// 合并会话（按人）走 sendChatThread，单订单会话仍走 sendChat；
+					// 合并那条路出错时自动退回按订单发送，保证「消息一定发得出去」。
+					const sendOnce = async () => {
+						const r = this.peerId
+							? await this.api().sendChatThread(this.peerId, content, this.meta(), type, thumb || '')
+							: await this.api().sendChat(this.taskId, content, this.meta(), type, thumb || '')
+						if (!r || r.code !== 0) throw new Error((r && r.msg) || '发送失败')
+						return r
+					}
+					let res
+					try {
+						res = await sendOnce()
+					} catch (e) {
+						if (this.peerId && this.taskId) {
+							console.warn('[chat] 合并会话发送失败，降级为按订单：', (e && e.message) || e)
+							this.peerId = ''
+							res = await sendOnce()
+						} else {
+							throw e
+						}
+					}
 					const saved = res.data || {}
 					const i = this.messages.findIndex((m) => m._id === tempId)
 					if (i >= 0) {

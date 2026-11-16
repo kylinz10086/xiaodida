@@ -2127,19 +2127,21 @@ async function chatConversations(uid, limit = 30) {
     const cur = byPeer.get(pid)
     const ids = Array.from(cur.taskIds)
     const tasks = ids.map((id) => taskMap.get(id)).filter(Boolean)
-    if (!tasks.length) continue
-    // 未读按「这个人发给我、我没读」汇总，不按订单拆
+    // 订单文档没了也照样出会话：消息才是「聊过」的证据，
+    // 之前这里直接 continue，导致清理过订单的老会话整条消失。
     const unreadRes = await db
       .collection(COLL.messages)
       .where({ from_id: pid, to_id: uid, read_at: 0 })
       .count()
     const profile = await ensureProfile(pid).catch(() => ({}))
-    const lastTask = taskMap.get(cur.last.task_id) || tasks[0]
+    const lastTask = taskMap.get(cur.last.task_id) || tasks[0] || null
     list.push({
       task_id: cur.last.task_id,
       peer_id: pid,
-      title: tasks.length > 1 ? '共 ' + tasks.length + ' 个订单' : (lastTask && lastTask.title) || '订单沟通',
-      task_count: tasks.length,
+      title: tasks.length > 1
+        ? '共 ' + tasks.length + ' 个订单'
+        : (lastTask && lastTask.title) || '历史会话',
+      task_count: ids.length,
       task_ids: ids,
       peer: {
         _id: pid,
@@ -2213,15 +2215,36 @@ async function sharedTasksWith(uid, peerId) {
   return list
 }
 
+/**
+ * 从消息反推「我和这个人」聊过的订单 id。
+ *
+ * 为什么需要：订单可能已经完成/取消，甚至被清理掉（runner_id 被清空），
+ * 这时 sharedTasksWith 找不回任何订单，老会话就变成「打不开、发不出」。
+ * 但消息本身还在 —— 用它兜底，历史聊天依然可读可回。
+ */
+async function threadTaskIdsFromMessages(uid, peerId) {
+  const col = db.collection(COLL.messages)
+  const a = await col.where({ from_id: uid, to_id: peerId }).orderBy('create_time', 'desc').limit(50).get()
+  const b = await col.where({ from_id: peerId, to_id: uid }).orderBy('create_time', 'desc').limit(50).get()
+  const ids = []
+  for (const m of [...(a.data || []), ...(b.data || [])]) {
+    if (m.task_id && ids.indexOf(m.task_id) < 0) ids.push(m.task_id)
+  }
+  return ids
+}
+
 /** 合并会话的消息：只取「我和这个人」所有共同订单下的消息 */
 async function chatThreadWithPeer(peerId, auth, opts = {}) {
   const uid = auth.uid
   const pid = String(peerId || '')
   assert(pid && pid !== uid, 400, '对方不正确')
   const tasks = await sharedTasksWith(uid, pid)
-  assert(tasks.length, 403, '你们之间还没有可聊的订单')
 
-  const taskIds = tasks.map((t) => t._id)
+  // 订单找不回来时（已完成被清、数据被清理）用消息反推，保证老会话还能看
+  let taskIds = tasks.map((t) => t._id)
+  if (!taskIds.length) taskIds = await threadTaskIdsFromMessages(uid, pid)
+  assert(taskIds.length, 403, '你们之间还没有可聊的订单')
+
   const limit = int(opts.limit || 60, { min: 1, max: 100, name: '条数' })
   const after = Number(opts.after) || 0
 
@@ -2239,24 +2262,33 @@ async function chatThreadWithPeer(peerId, auth, opts = {}) {
     .where({ task_id: dbCmd.in(taskIds), to_id: uid, read_at: 0 })
     .update({ read_at: Date.now() })
 
-  const taskMap = {}
-  for (const t of tasks) taskMap[t._id] = t
+  // 任务标题：真实订单优先；订单已被清掉时给个占位，别让整个会话打不开
+  const taskRes = await db
+    .collection(COLL.tasks)
+    .where({ _id: dbCmd.in(taskIds.slice(0, 200)) })
+    .get()
+  const taskMap = new Map((taskRes.data || []).map((t) => [t._id, t]))
+  const displayTasks = taskIds.map((id) => {
+    const t = taskMap.get(id)
+    return t || { _id: id, title: '历史订单', status: 0 }
+  })
+  const first = displayTasks[0] || { _id: '', title: '订单沟通', status: 0 }
   const profile = await ensureProfile(pid).catch(() => ({}))
 
   return {
     me: uid,
     peer: { _id: pid, nickname: profile.nickname || '对方', avatar: profile.avatar || '' },
-    tasks: tasks.map((t) => ({
+    tasks: displayTasks.map((t) => ({
       _id: t._id,
       title: t.title,
       status: t.status,
       status_text: STATUS_TEXT[t.status] || ''
     })),
     task: {
-      _id: tasks[0]._id,
-      title: tasks.length > 1 ? '共 ' + tasks.length + ' 个订单' : tasks[0].title,
-      status: tasks[0].status,
-      status_text: STATUS_TEXT[tasks[0].status] || ''
+      _id: first._id,
+      title: displayTasks.length > 1 ? '共 ' + displayTasks.length + ' 个订单' : first.title,
+      status: first.status,
+      status_text: STATUS_TEXT[first.status] || ''
     },
     list: rows.map((m) => ({
       _id: m._id,
@@ -2276,8 +2308,16 @@ async function chatThreadWithPeer(peerId, auth, opts = {}) {
 
 /** 合并会话里发消息：优先挂到「进行中」的订单，没有就挂最近那单 */
 async function chatSendToPeer(peerId, auth, content, opts = {}) {
-  const tasks = await sharedTasksWith(auth.uid, String(peerId || ''))
-  assert(tasks.length, 403, '你们之间还没有可聊的订单')
+  const uid = auth.uid
+  const pid = String(peerId || '')
+  assert(pid && pid !== uid, 400, '对方不正确')
+  let tasks = await sharedTasksWith(uid, pid)
+  if (!tasks.length) {
+    // 订单没了（完成/取消/被清理）但历史消息还在 —— 用最后聊过的那单当容器
+    const ids = await threadTaskIdsFromMessages(uid, pid)
+    assert(ids.length, 403, '你们之间还没有可聊的订单')
+    tasks = [{ _id: ids[0], publisher_id: uid, runner_id: pid, status: STATUS.ONGOING }]
+  }
   const ongoing = tasks.filter((t) => t.status === STATUS.ONGOING)
   const task = ongoing.length ? ongoing[0] : tasks[0]
   return chatSend(task, auth, content, opts)
