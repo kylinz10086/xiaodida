@@ -29,7 +29,9 @@
 				<view class="tl" :class="{ on: !!taskData.accept_time }">
 					<text class="tl-dot"></text>
 					<view class="tl-main">
-						<text class="tl-title">已接单</text>
+						<!-- 还没人接的时候写「未接单」：原来固定写「已接单」，
+						     下面又跟一句「等待骑手接单」，自相矛盾 -->
+						<text class="tl-title">{{ taskData.accept_time ? '已接单' : '未接单' }}</text>
 						<text class="tl-time">{{ taskData.accept_time ? formatTime(taskData.accept_time) : '等待骑手接单' }}</text>
 					</view>
 				</view>

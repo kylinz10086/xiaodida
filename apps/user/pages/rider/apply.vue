@@ -84,12 +84,6 @@
 				<text class="reject-reason">{{ profile.rider_reject_reason || '可修改资料后重新提交' }}</text>
 			</view>
 		</view>
-
-		<view class="tips">
-			<text class="tips-title">学号怎么看</text>
-			<text class="tips-item">15 位学号 = 4 位入学学年 + 6 位学院专业号 + 5 位班级学号</text>
-			<text class="tips-item">例如 202512211404009 → 2025 学年 / 122114 / 04009</text>
-		</view>
 	</view>
 </template>
 
@@ -384,8 +378,4 @@
 	.reject { margin-top: 22rpx; background: #ffecec; border-radius: 14rpx; padding: 16rpx 20rpx; }
 	.reject-title { font-size: 25rpx; color: #c62828; font-weight: 600; }
 	.reject-reason { display: block; margin-top: 6rpx; font-size: 23rpx; color: #c62828; }
-
-	.tips { padding: 28rpx 12rpx; display: flex; flex-direction: column; gap: 8rpx; }
-	.tips-title { font-size: 25rpx; font-weight: 700; color: #1c1c1e; }
-	.tips-item { font-size: 23rpx; color: #8e8e93; line-height: 1.6; }
 </style>
