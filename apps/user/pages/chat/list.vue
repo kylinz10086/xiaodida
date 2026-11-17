@@ -97,13 +97,24 @@
 				// 按「人」进会话：同两个人的多个订单合并成一条时间线。
 				// 同时把最后一单的 taskId 也带上 —— 合并会话万一出错，
 				// 聊天页可以立刻退回「按订单」的老路径，不至于聊不了天。
-				if (c.peer_id) {
-					uni.navigateTo({
-						url: '/pages/chat/chat?peer=' + c.peer_id + '&taskId=' + (c.task_id || '') + '&role=' + this.role
-					})
+				let url = ''
+				if (c && c.peer_id) {
+					url = '/pages/chat/chat?peer=' + c.peer_id + '&taskId=' + (c.task_id || '') + '&role=' + this.role
+				} else if (c && c.task_id) {
+					url = '/pages/chat/chat?taskId=' + c.task_id + '&role=' + this.role
+				} else {
+					// 既没有对方也没有订单：不该出现，但别让点击变成「没反应」
+					uni.showToast({ title: '这条会话缺少信息，下拉刷新试试', icon: 'none' })
 					return
 				}
-				uni.navigateTo({ url: '/pages/chat/chat?taskId=' + c.task_id + '&role=' + this.role })
+				uni.navigateTo({
+					url,
+					fail: (err) => {
+						// 页面栈满 / 页面没注册时以前是静默失败，看起来就像「点了没反应」
+						console.warn('[chat] 打开会话失败：', url, err)
+						uni.showToast({ title: '打开失败，返回上一页再试', icon: 'none' })
+					}
+				})
 			},
 			lastText(c) {
 				const last = c.last || {}

@@ -909,6 +909,69 @@ async function main() {
   try { await C.setAdminNickname('u_not_exist', '正常昵称') } catch (e) { noUserThrew = e.code === 404 }
   ok('不存在的账号被拒（404）', noUserThrew)
 
+  section('16. 会话：按人聚合 / 不串台 / 订单被清后仍可打开')
+
+  const nowC = Date.now()
+  const T1 = 't_chat_1', T2 = 't_chat_2', T3 = 't_chat_3'
+  const UA = 'u_chat_a', UB = 'u_chat_b', UC = 'u_chat_c'
+  tableRows('xyyx-tasks').push(
+    { _id: T1, publisher_id: UA, runner_id: UB, title: '取快递', status: 3, create_time: nowC - 90000 },
+    { _id: T2, publisher_id: UA, runner_id: UB, title: '带饭', status: 3, create_time: nowC - 50000 },
+    { _id: T3, publisher_id: UC, runner_id: UA, title: '打印资料', status: 3, create_time: nowC - 30000 }
+  )
+  tableRows('xyyx-messages').push(
+    { _id: 'm1', from_id: UB, to_id: UA, task_id: T1, content: '到楼下了', type: 'text', create_time: nowC - 8000, read_at: 0 },
+    { _id: 'm2', from_id: UA, to_id: UB, task_id: T2, content: '好的', type: 'text', create_time: nowC - 7000, read_at: 0 },
+    { _id: 'm3', from_id: UC, to_id: UA, task_id: T3, content: '打印好了', type: 'text', create_time: nowC - 6000, read_at: 0 }
+  )
+
+  const convs = await C.chatConversations(UA)
+  ok('会话按人聚合：A 看到 2 个会话', convs.list.length === 2, '实际 ' + convs.list.length)
+  const convB = convs.list.find((x) => x.peer_id === UB)
+  ok('同一人的两个订单合并成一条', convB && convB.task_count === 2, convB && 'task_count=' + convB.task_count)
+  ok('合并会话标题是「共 2 个订单」', convB && convB.title === '共 2 个订单', convB && convB.title)
+  ok('不同对象各占一条', !!convs.list.find((x) => x.peer_id === UC))
+  ok('未读数按对方汇总', convs.list.find((x) => x.peer_id === UC).unread === 1)
+
+  const thB = await C.chatThreadWithPeer(UB, { uid: UA })
+  ok('打开与 B 的合并会话：2 条消息', thB.list.length === 2, '实际 ' + thB.list.length)
+  ok('合并会话标题为共 2 个订单', thB.task.title === '共 2 个订单', thB.task.title)
+
+  // 订单文档被清掉（后台清理/删测试数据）后，会话还能不能打开？
+  const taskRows = tableRows('xyyx-tasks')
+  taskRows.splice(taskRows.findIndex((t) => t._id === T2), 1)
+  const thAfterPurge = await C.chatThreadWithPeer(UB, { uid: UA })
+  ok('删掉一单，那单的聊天记录仍在', thAfterPurge.list.length === 2, '实际 ' + thAfterPurge.list.length)
+  ok('缺失的订单用「历史订单」占位', thAfterPurge.tasks.some((t) => t.title === '历史订单'))
+
+  taskRows.splice(taskRows.findIndex((t) => t._id === T1), 1)
+  const thNoTask = await C.chatThreadWithPeer(UB, { uid: UA })
+  ok('双方订单全没了，用消息反推仍可打开', thNoTask.list.length === 2, '实际 ' + thNoTask.list.length)
+  ok('订单清空后会话列表仍有 B', !!(await C.chatConversations(UA)).list.find((x) => x.peer_id === UB))
+
+  // 「列表里能看到、点进去却是空白」是最容易被当成「打不开」的形态，逐条点一遍
+  let allOpen = true
+  for (const c of (await C.chatConversations(UA)).list) {
+    if (!(await C.chatThreadWithPeer(c.peer_id, { uid: UA })).list.length) allOpen = false
+  }
+  ok('列表里每条会话都能打开且不是空白', allOpen)
+
+  // 同一单先被 C 接过（聊了两句后放弃），后来被 B 接过：
+  // 打开「和 B 的会话」时，不能出现 A 与 C 的私聊。
+  const T4 = 't_chat_4'
+  tableRows('xyyx-tasks').push({ _id: T4, publisher_id: UA, runner_id: UB, title: '代拿外卖', status: 2, create_time: nowC - 20000 })
+  tableRows('xyyx-messages').push(
+    { _id: 'm4', from_id: UA, to_id: UC, task_id: T4, content: '我改让别人送了', type: 'text', create_time: nowC - 4000, read_at: 0 },
+    { _id: 'm5', from_id: UC, to_id: UA, task_id: T4, content: '行', type: 'text', create_time: nowC - 3500, read_at: 0 },
+    { _id: 'm6', from_id: UB, to_id: UA, task_id: T4, content: '我接了', type: 'text', create_time: nowC - 3000, read_at: 0 }
+  )
+  const thCross = await C.chatThreadWithPeer(UB, { uid: UA })
+  ok(
+    '换过骑手的订单不串台（看不到与 C 的私聊）',
+    !thCross.list.some((m) => m.from_id === UC || m.to_id === UC),
+    '串台 ' + thCross.list.filter((m) => m.from_id === UC || m.to_id === UC).length + ' 条'
+  )
+  ok('B 发来的那条在（只筛掉与别人的对话）', thCross.list.some((m) => m.content === '我接了'))
   /* ---------------- 结果 ---------------- */
   console.log('')
   if (fails.length) {

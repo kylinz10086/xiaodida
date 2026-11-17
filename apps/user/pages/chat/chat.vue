@@ -16,6 +16,12 @@
 			<text class="head-arrow">›</text>
 		</view>
 
+		<view class="load-err" v-if="loadErr">
+			<text class="load-err-title">会话打不开</text>
+			<text class="load-err-msg">{{ loadErr }}</text>
+			<view class="load-err-btn" @click="retry">重新加载</view>
+		</view>
+
 		<scroll-view class="chat-body" scroll-y :scroll-into-view="anchor" :scroll-with-animation="true"
 			:show-scrollbar="false">
 			<view class="notice">
@@ -24,6 +30,10 @@
 
 			<view class="msg-list">
 				<block v-for="(m, i) in messages" :key="m._id">
+					<!-- 合并会话里换个订单了：加一条分隔，避免误以为还是同一单 -->
+					<view v-if="orderSep(i)" class="order-sep">
+						<text>{{ m.task_title }}</text>
+					</view>
 					<view v-if="showTime(i)" class="time-sep">{{ fmtTime(m.create_time) }}</view>
 
 					<!-- 系统提示 -->
@@ -110,6 +120,8 @@
 				draft: '',
 				sending: false,
 				loading: false,
+				loadErr: '',
+				taskCount: 0,
 				anchor: '',
 				timer: null,
 				imgMap: {},
@@ -183,6 +195,7 @@
 			async load() {
 				if (this.loading) return
 				this.loading = true
+				this.loadErr = ''
 				try {
 					let d = null
 					if (this.peerId) {
@@ -208,15 +221,30 @@
 					this.peer = d.peer || {}
 					this.task = d.task || {}
 					this.messages = d.list || []
+					this.taskCount = (d.tasks && d.tasks.length) || 0
 					this.resolveImages()
 					this.syncTitle()
 					this.scrollToBottom()
 					this.startPolling()
 				} catch (e) {
-					uni.showToast({ title: (e && e.message) || '加载失败', icon: 'none' })
+					// 原来这里只弹一个 toast，一闪而过就成了「点了没反应 / 页面打不开」。
+					// 改成页面上留一张错误卡片 + 重试按钮，用户能看到原因，也我们能据此定位。
+					this.loadErr = (e && e.message) || '加载失败'
+					console.warn('[chat] 会话加载失败：', this.loadErr)
 				} finally {
 					this.loading = false
 				}
+			},
+			retry() {
+				this.load()
+			},
+			/** 合并会话里「换单」的那一条要不要加订单分隔 */
+			orderSep(i) {
+				if (!this.peerId || this.taskCount < 2) return false
+				const cur = this.messages[i]
+				if (!cur || !cur.task_title) return false
+				if (i === 0) return true
+				return this.messages[i - 1].task_id !== cur.task_id
 			},
 			async poll() {
 				// 会话一开始是空的时候也要轮询：对方可能先发消息
@@ -572,6 +600,61 @@
 	}
 
 	.msg-list { padding: 20rpx 24rpx 10rpx; }
+
+	/* 合并会话里换订单了：一条淡色标题，别让它看起来像同一条时间线上的话 */
+	.order-sep {
+		margin: 18rpx 0 6rpx;
+		text-align: center;
+
+		text {
+			display: inline-block;
+			max-width: 80%;
+			padding: 6rpx 18rpx;
+			background: #eceff4;
+			border-radius: 999rpx;
+			font-size: 21rpx;
+			color: #7d8592;
+		}
+	}
+
+	/* 加载失败不再是「一闪而过的 toast」，页面上留一张卡片，能看清原因也能重试 */
+	.load-err {
+		flex-shrink: 0;
+		margin: 18rpx 24rpx 0;
+		padding: 24rpx;
+		background: #fff1f0;
+		border-radius: 14rpx;
+		border: 1rpx solid #ffd6d3;
+	}
+
+	.load-err-title {
+		display: block;
+		font-size: 27rpx;
+		font-weight: 600;
+		color: #c0392b;
+	}
+
+	.load-err-msg {
+		display: block;
+		margin-top: 8rpx;
+		font-size: 23rpx;
+		color: #a4544c;
+		line-height: 1.5;
+		word-break: break-all;
+	}
+
+	.load-err-btn {
+		margin-top: 16rpx;
+		align-self: flex-start;
+		display: inline-block;
+		padding: 10rpx 28rpx;
+		background: #fff;
+		border: 1rpx solid #ffc9c4;
+		border-radius: 999rpx;
+		font-size: 23rpx;
+		color: #c0392b;
+		text-align: center;
+	}
 
 	.time-sep {
 		text-align: center;

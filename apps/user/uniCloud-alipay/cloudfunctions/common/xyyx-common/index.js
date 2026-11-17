@@ -2240,16 +2240,36 @@ async function chatThreadWithPeer(peerId, auth, opts = {}) {
   assert(pid && pid !== uid, 400, '对方不正确')
   const tasks = await sharedTasksWith(uid, pid)
 
-  // 订单找不回来时（已完成被清、数据被清理）用消息反推，保证老会话还能看
-  let taskIds = tasks.map((t) => t._id)
-  if (!taskIds.length) taskIds = await threadTaskIdsFromMessages(uid, pid)
+  // 两路来源取并集：
+  //   1. 我们之间还在的订单
+  //   2. 消息里出现过的订单（订单完成被清、后台清理后文档没了，消息还在）
+  // 以前只在「一单都找不到」时才用消息兜底，结果清理掉其中一单，那单的聊天记录就整段消失，
+  // 用户看到的就是「会话少了一半、甚至空白」。
+  const taskIds = []
+  for (const t of tasks) {
+    if (t && t._id && taskIds.indexOf(t._id) < 0) taskIds.push(t._id)
+  }
+  for (const id of await threadTaskIdsFromMessages(uid, pid)) {
+    if (id && taskIds.indexOf(id) < 0) taskIds.push(id)
+  }
   assert(taskIds.length, 403, '你们之间还没有可聊的订单')
 
   const limit = int(opts.limit || 60, { min: 1, max: 100, name: '条数' })
   const after = Number(opts.after) || 0
 
-  const where = { task_id: dbCmd.in(taskIds) }
-  if (after > 0) where.create_time = dbCmd.gt(after)
+  const cond = { task_id: dbCmd.in(taskIds) }
+  if (after > 0) cond.create_time = dbCmd.gt(after)
+  // 只取「我和他」之间的消息。同一单可能先被别人接过（放弃后换人），
+  // 他和别人的私聊挂在同一个 task_id 下，不筛就会串台 ——
+  // 明明点的是 A 的会话，看到的却是 A 和别人的对话。
+  const where = dbCmd.and(
+    cond,
+    dbCmd.or(
+      { from_id: uid, to_id: pid },
+      { from_id: pid, to_id: uid },
+      { from_id: 'system' } // 接单/放弃这类系统提示保留，否则时间线缺上下文
+    )
+  )
   const base = db.collection(COLL.messages).where(where)
   const res =
     after > 0
@@ -2311,16 +2331,24 @@ async function chatSendToPeer(peerId, auth, content, opts = {}) {
   const uid = auth.uid
   const pid = String(peerId || '')
   assert(pid && pid !== uid, 400, '对方不正确')
-  let tasks = await sharedTasksWith(uid, pid)
-  if (!tasks.length) {
-    // 订单没了（完成/取消/被清理）但历史消息还在 —— 用最后聊过的那单当容器
-    const ids = await threadTaskIdsFromMessages(uid, pid)
-    assert(ids.length, 403, '你们之间还没有可聊的订单')
-    tasks = [{ _id: ids[0], publisher_id: uid, runner_id: pid, status: STATUS.ONGOING }]
-  }
+  const tasks = await sharedTasksWith(uid, pid)
+  const msgTaskIds = await threadTaskIdsFromMessages(uid, pid)
+  assert(tasks.length || msgTaskIds.length, 403, '你们之间还没有可聊的订单')
   const ongoing = tasks.filter((t) => t.status === STATUS.ONGOING)
-  const task = ongoing.length ? ongoing[0] : tasks[0]
-  return chatSend(task, auth, content, opts)
+  // 优先挂在「进行中」的单上，对方一定看得到；全结束了就挂最近聊过的那单，
+  // 这样即使订单被清理，消息也不会因为找不到归属而发不出去。
+  if (ongoing.length) return chatSend(ongoing[0], auth, content, opts)
+  if (msgTaskIds.length) {
+    const lastTask = tasks.find((t) => t._id === msgTaskIds[0])
+    if (lastTask) return chatSend(lastTask, auth, content, opts)
+    return chatSend(
+      { _id: msgTaskIds[0], publisher_id: uid, runner_id: pid, status: STATUS.ONGOING },
+      auth,
+      content,
+      opts
+    )
+  }
+  return chatSend(tasks[0], auth, content, opts)
 }
 
 /* ================================================================== */
