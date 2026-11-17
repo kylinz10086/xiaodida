@@ -565,25 +565,30 @@ async function main() {
 
   const done = tableRows(C.COLL.tasks).find((t) => t._id === task1)
   ok('订单已完成', done.status === 3)
-  ok('佣金 10% = 85 分', done.commission_cent === 85, String(done.commission_cent))
-  ok('骑手实得 765 分', done.rider_income_cent === 765, String(done.rider_income_cent))
-  ok('记录确认人', done.complete_by === PUB)
+  // 平台服务费 8%（1.2.x 从 10% 调下来）：850 × 8% = 68，骑手 782
+  ok('佣金 8% = 68 分', done.commission_cent === 68, String(done.commission_cent))
+  ok('骑手实得 782 分', done.rider_income_cent === 782, String(done.rider_income_cent))
+  // autoSettleOnDeliver=true：送达那一刻就结算，完成人是骑手而不是发布者
+  ok('记录完成人（送达即结算=骑手）', done.complete_by === 'rider:' + RIDER1, String(done.complete_by))
   ok('记录完成时间', done.complete_time > 0)
 
   const wallet1 = tableRows(C.COLL.wallets).find((w) => w._id === RIDER1)
-  ok('骑手钱包 +7.65 元', wallet1 && wallet1.balance_cent === 765, JSON.stringify(wallet1))
-  ok('骑手累计收入 765 分', wallet1 && wallet1.income_cent === 765)
+  ok('骑手钱包 +7.82 元', wallet1 && wallet1.balance_cent === 782, JSON.stringify(wallet1))
+  ok('骑手累计收入 782 分', wallet1 && wallet1.income_cent === 782)
 
   const task1Tx = tableRows(C.COLL.transactions).filter((x) => x.task_id === task1)
   const settlementTx = task1Tx.filter((x) => x.type !== 'escrow_in')
   ok('支付产生 1 条托管入账', task1Tx.filter((x) => x.type === 'escrow_in').length === 1)
   ok('结算产生 3 条流水', settlementTx.length === 3, String(settlementTx.length))
-  ok('收入 +765', task1Tx.some((x) => x.type === 'income' && x.amount_cent === 765))
-  ok('佣金 +85', task1Tx.some((x) => x.type === 'commission' && x.amount_cent === 85))
+  ok('收入 +782', task1Tx.some((x) => x.type === 'income' && x.amount_cent === 782))
+  ok('佣金 +68', task1Tx.some((x) => x.type === 'commission' && x.amount_cent === 68))
   ok('托管出账 -850', task1Tx.some((x) => x.type === 'escrow_out' && x.amount_cent === -850))
   ok('每条流水都有幂等键', task1Tx.every((x) => !!x.idempotency_key))
 
-  codeIs('重复确认收货', await call(userObj, PUB, 'confirmReceipt', task1), 400)
+  // 送达即结算之后，「确认收货」再来一次是幂等返回，不再报错（旧断言写的是 400）
+  const dupConfirm = await call(userObj, PUB, 'confirmReceipt', task1)
+  codeIs('重复确认收货不报错', dupConfirm, 0)
+  ok('重复确认带 already 标记', !!(dupConfirm.data && dupConfirm.data.already), JSON.stringify(dupConfirm.data))
   let dupSettle = false
   try {
     await C.settleTask(done, PUB)
@@ -591,11 +596,11 @@ async function main() {
     dupSettle = true
   }
   ok('重复结算抛错', dupSettle)
-  ok('钱包未二次入账', tableRows(C.COLL.wallets).find((w) => w._id === RIDER1).balance_cent === 765)
+  ok('钱包未二次入账', tableRows(C.COLL.wallets).find((w) => w._id === RIDER1).balance_cent === 782)
 
   const riderWallet = await call(riderObj, RIDER1, 'getWallet')
-  ok('骑手钱包接口余额正确', riderWallet.code === 0 && riderWallet.data.balance === 7.65)
-  ok('骑手流水含本单收入', riderWallet.data.transactions.some((x) => x.type === 'income' && x.amount === 7.65))
+  ok('骑手钱包接口余额正确', riderWallet.code === 0 && riderWallet.data.balance === 7.82)
+  ok('骑手流水含本单收入', riderWallet.data.transactions.some((x) => x.type === 'income' && x.amount === 7.82))
 
   const jobs = await call(riderObj, RIDER1, 'listMyJobs', {})
   ok('我的任务含已完成单', jobs.data.list.some((t) => t._id === task1 && t.status === 3))
@@ -642,16 +647,21 @@ async function main() {
   const big = await call(userObj, PUB, 'publishTask', { ...base, title: '大额结算测试单', amount: 10 })
   await call(payObj, PUB, 'mockPaySuccess', big.data.id)
   await call(riderObj, RIDER1, 'grabTask', big.data.id)
+  // 送达前必须先取件（1.2.x 加的防跳步校验），少了这步 markDelivered 会 400
+  await call(riderObj, RIDER1, 'markPicked', big.data.id)
   await call(riderObj, RIDER1, 'markDelivered', big.data.id)
-  await call(userObj, PUB, 'confirmReceipt', big.data.id)
   const walletBeforeWd = tableRows(C.COLL.wallets).find((w) => w._id === RIDER1)
-  ok('结算后余额 16.65 元', walletBeforeWd.balance_cent === 1665, String(walletBeforeWd.balance_cent))
+  // 782（首单）+ 920（10 元单扣 8%）
+  ok('结算后余额 17.02 元', walletBeforeWd.balance_cent === 1702, String(walletBeforeWd.balance_cent))
 
-  codeIs('提现 10 元', await call(riderObj, RIDER1, 'requestWithdraw', { amount: 10 }), 0)
+  // 提现已迁到 xyyx-pay（要调微信商家转账）：骑手端这个旧入口只会被拒，且不能动钱
+  const legacyWd = await call(riderObj, RIDER1, 'requestWithdraw', { amount: 10 })
+  codeIs('骑手端提现入口已下架', legacyWd, 400)
+  ok('提示指向新版本', String(legacyWd.msg || '').indexOf('升级') >= 0, String(legacyWd.msg || ''))
   const walletAfterWd = tableRows(C.COLL.wallets).find((w) => w._id === RIDER1)
-  ok('余额扣 1000 分', walletAfterWd.balance_cent === 665, String(walletAfterWd.balance_cent))
-  ok('冻结 +1000 分', walletAfterWd.frozen_cent === 1000, String(walletAfterWd.frozen_cent))
-  ok('产生提现流水', tableRows(C.COLL.transactions).some((x) => x.user_id === RIDER1 && x.type === 'withdraw' && x.amount_cent === -1000))
+  ok('下架后余额不动', walletAfterWd.balance_cent === 1702, String(walletAfterWd.balance_cent))
+  ok('下架后不冻结', (walletAfterWd.frozen_cent || 0) === 0, String(walletAfterWd.frozen_cent))
+  ok('下架后不产生提现流水', !tableRows(C.COLL.transactions).some((x) => x.user_id === RIDER1 && x.type === 'withdraw'))
   codeIs('提现超余额', await call(riderObj, RIDER1, 'requestWithdraw', { amount: 100 }), 400)
 
   /* ---------------- 9. 定时任务 ---------------- */
@@ -660,6 +670,7 @@ async function main() {
   const autoTask = await call(userObj, PUB, 'publishTask', { ...base, title: '自动确认测试单', amount: 10 })
   await call(payObj, PUB, 'mockPaySuccess', autoTask.data.id)
   await call(riderObj, RIDER1, 'grabTask', autoTask.data.id)
+  await call(riderObj, RIDER1, 'markPicked', autoTask.data.id)
   await call(riderObj, RIDER1, 'markDelivered', autoTask.data.id)
   const autoDoc = tableRows(C.COLL.tasks).find((t) => t._id === autoTask.data.id)
   autoDoc.auto_confirm_at = Date.now() - 1000
@@ -671,7 +682,8 @@ async function main() {
   ok('清理了过期 nonce', cronResult.nonces_removed >= 1)
 
   const walletAfterCron = tableRows(C.COLL.wallets).find((w) => w._id === RIDER1)
-  ok('自动结算骑手 +9 元', walletAfterCron.balance_cent === 665 + 900, String(walletAfterCron.balance_cent))
+  // 1702 + 920（10 元单扣 8%）
+  ok('自动结算骑手 +9.2 元', walletAfterCron.balance_cent === 1702 + 920, String(walletAfterCron.balance_cent))
 
   /* ---------------- 10. 我的订单/任务聚合 ---------------- */
   section('10. 我的订单 / 我的任务聚合')
