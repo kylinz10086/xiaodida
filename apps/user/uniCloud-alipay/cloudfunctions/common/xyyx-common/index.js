@@ -2249,7 +2249,8 @@ async function chatThreadWithPeer(peerId, auth, opts = {}) {
   for (const t of tasks) {
     if (t && t._id && taskIds.indexOf(t._id) < 0) taskIds.push(t._id)
   }
-  for (const id of await threadTaskIdsFromMessages(uid, pid)) {
+  const msgTaskIds = await threadTaskIdsFromMessages(uid, pid)
+  for (const id of msgTaskIds) {
     if (id && taskIds.indexOf(id) < 0) taskIds.push(id)
   }
   assert(taskIds.length, 403, '你们之间还没有可聊的订单')
@@ -2306,7 +2307,11 @@ async function chatThreadWithPeer(peerId, auth, opts = {}) {
     })),
     task: {
       _id: first._id,
-      title: displayTasks.length > 1 ? '共 ' + displayTasks.length + ' 个订单' : first.title,
+      // 标题里的「共 N 个订单」要和列表页一致：按**真聊过的订单**算，
+      // 不能把「共同但有没聊过的单」也算进去，否则列表写 4、点进去写 6。
+      title: (msgTaskIds.length || taskIds.length) > 1
+        ? '共 ' + (msgTaskIds.length || taskIds.length) + ' 个订单'
+        : first.title,
       status: first.status,
       status_text: STATUS_TEXT[first.status] || ''
     },

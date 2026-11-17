@@ -53,3 +53,6 @@ desktop.ini
 
 # 微信支付真实配置（模板见 pay-config.example.js）
 apps/user/uniCloud-*/cloudfunctions/xyyx-pay/pay-config.js
+
+# 临时装 miniprogram-automator 的目录
+tools/automator-tmp/

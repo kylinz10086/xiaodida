@@ -1,7 +1,7 @@
 <template>
 	<view class="list-page">
 		<view class="list" v-if="conversations.length">
-			<view class="conv" v-for="c in conversations" :key="convKey(c)" @click="openChat(c)">
+			<view class="conv" v-for="(c, i) in conversations" :key="i" :data-idx="i" @click="openRow">
 				<view class="conv-avatar" :style="{ background: colorOf(c.peer && c.peer.nickname) }">
 					<image v-if="avatarOf(c.peer)" class="conv-avatar-img" :src="avatarOf(c.peer)" mode="aspectFill"></image>
 					<text v-else>{{ initial(c.peer && c.peer.nickname) }}</text>
@@ -89,9 +89,24 @@
 					this.timer = null
 				}
 			},
-			/** 小程序端 :key 不支持 || 表达式，统一在这里算 */
-			convKey(c) {
-				return (c && (c.peer_id || c.task_id)) || ''
+			/**
+			 * 点一行进会话。
+			 *
+			 * 这里**故意不把 v-for 的 c 当参数传**：模板里 `@click="openChat(c)"` 配上
+			 * `:key="convKey(c)"` 时，编译器会把 key 表达式当成属性名塞进参数解析：
+			 *   [[['conversations','convKey(c)',c.m0]]]  ->  item['convKey(c)'] 永远 undefined
+			 * 结果 openChat 收到 undefined，点上去毫无反应（1.2.9 ~ 1.2.11 消息打不开的元凶）。
+			 * 改成「下标走 dataset、方法不带参数」，不碰这套参数解析，最稳。
+			 */
+			openRow(e) {
+				const ds = (e && ((e.currentTarget && e.currentTarget.dataset) || (e.target && e.target.dataset))) || {}
+				const idx = Number(ds.idx)
+				const c = Number.isFinite(idx) ? (this.conversations || [])[idx] : null
+				if (!c) {
+					uni.showToast({ title: '这条会话读不到，下拉刷新试试', icon: 'none' })
+					return
+				}
+				this.openChat(c)
 			},
 			openChat(c) {
 				// 按「人」进会话：同两个人的多个订单合并成一条时间线。
