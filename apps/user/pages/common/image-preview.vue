@@ -41,13 +41,18 @@
 				// 当前这张彻底打不开（三条路都失败）才提示
 				broken: {},
 				// 走的是哪条路（短暂显示后就隐藏，别一直挂着）
-				label: ''
+				label: '',
+				// 打不开的具体原因（三条路各自的报错），显示在提示条上便于报障
+				why: {}
 			}
 		},
 		computed: {
 			tipText() {
 				const it = this.list[this.current]
-				if (it && it.fileID && this.broken[it.fileID]) return '点此重试'
+				if (it && it.fileID && this.broken[it.fileID]) {
+					const why = (this.why[it.fileID] || '').slice(0, 30)
+					return why ? '打不开（' + why + '）· 点此重试' : '打不开 · 点此重试'
+				}
 				return this.label
 			},
 			curKey() {
@@ -97,7 +102,8 @@
 				this.$set(this.loading, it.fileID, true)
 				let r = { src: '', method: '', errors: [] }
 				try {
-					r = await resolveImageSrc(this.role, it.fileID, { skip })
+					// 全屏看的是大图：强制落成本地文件，别把 600KB 的 data URI 塞进 setData
+				r = await resolveImageSrc(this.role, it.fileID, { skip, preferFile: true })
 				} catch (e) {
 					r.errors = [(e && e.message) || '图片加载失败']
 				}
@@ -113,6 +119,7 @@
 					return
 				}
 				// 三条路都失败：如果还有缩略图就先显示缩略图，只留一个「点此重试」
+				this.$set(this.why, it.fileID, (r.errors || []).join('；'))
 				this.$set(this.broken, it.fileID, true)
 				this.label = ''
 			},
@@ -132,6 +139,7 @@
 				this.$delete(this.full, it.fileID)
 				this.$delete(this.failed, it.fileID)
 				this.$delete(this.method, it.fileID)
+				this.$set(this.why, it.fileID, '')
 				this.$set(this.broken, it.fileID, false)
 				this.label = ''
 				this.loadFull(this.current)

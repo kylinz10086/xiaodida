@@ -282,7 +282,7 @@
 <script>
 	import { mapGetters, mapActions } from 'vuex';
 	import { navigateTo, fmtMoney, errText } from '@/common/rider-util.js';
-	import { resolveImageSrc } from '@/common/image.js';
+	import { resolveImageSrc, prefetchImages } from '@/common/image.js';
 
 	export default {
 		data() {
@@ -393,15 +393,14 @@
 					this.taskData.deliver_proof
 				].filter((id) => typeof id === 'string' && (id.indexOf('cloud://') === 0 || /^https?:\/\//.test(id)));
 				if (!ids.length) return;
-				// 直读 data URI 优先（不依赖域名、不落盘），失败自动换下一条路径
+				// 有缩略图的直接画缩略图，只有「没缩略图的」才需要取原图。
+				// 以前是一张一张 await（3 张 = 3 个来回，遇上云函数冷启动就是好几秒），
+				// 现在并行 + 磁盘缓存命中，基本都是立刻出来。
 				const missing = ids.filter((id) => !this.imageMap[id] && !this.thumbOf(id));
-				for (const id of missing.slice(0, 3)) {
-					try {
-						const r = await resolveImageSrc('user', id);
-						if (r && r.src) this.imageMap = Object.assign({}, this.imageMap, { [id]: r.src });
-					} catch (e) {
-						// 单张失败不影响其它图
-					}
+				if (!missing.length) return;
+				const map = await prefetchImages('user', missing, { concurrency: 3 });
+				if (Object.keys(map).length) {
+					this.imageMap = Object.assign({}, this.imageMap, map);
 				}
 			},
 			/** 打开自建预览页（缩略图秒开，原图后台替换），不再用会转圈的 uni.previewImage */

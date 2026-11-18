@@ -228,6 +228,164 @@ export async function fetchImageData(role, fileID, onProgress) {
 	return 'data:' + mime + ';base64,' + [d0.base64].concat(got).join('')
 }
 
+/* ------------------------------------------------------------------ *
+ * 本地磁盘缓存
+ *
+ * 为什么要有：data URI 走 setData，一张 600KB 的图就是 600KB 的字符串传进渲染层，
+ * 真机上肉眼可见地卡；而且每次进页面都重新分片取一遍，来回都是云函数冷启动。
+ * 落盘之后 <image src="wxfile://..."> 是本地文件，秒开，setData 只有一个短路径。
+ * ------------------------------------------------------------------ */
+
+const DISK_KEY = '__imgDiskCache'
+const DISK_MAX_COUNT = 12
+const DISK_MAX_BYTES = 6 * 1024 * 1024
+
+function fsOf() {
+	return typeof wx !== 'undefined' && wx.getFileSystemManager ? wx.getFileSystemManager() : null
+}
+
+function userDataPath() {
+	return (typeof wx !== 'undefined' && wx.env && wx.env.USER_DATA_PATH) || ''
+}
+
+function diskIndex() {
+	try {
+		return uni.getStorageSync(DISK_KEY) || {}
+	} catch (e) {
+		return {}
+	}
+}
+
+function diskSaveIndex(map) {
+	try {
+		uni.setStorageSync(DISK_KEY, map)
+	} catch (e) {}
+}
+
+function diskGet(id) {
+	const key = String(id || '')
+	if (!key) return ''
+	const map = diskIndex()
+	const hit = map[key]
+	if (!hit || !hit.path) return ''
+	const fs = fsOf()
+	if (!fs) return ''
+	try {
+		fs.accessSync(hit.path)
+		hit.at = Date.now()
+		diskSaveIndex(map)
+		return hit.path
+	} catch (e) {
+		delete map[key]
+		diskSaveIndex(map)
+		return ''
+	}
+}
+
+function diskPut(id, path, size) {
+	const key = String(id || '')
+	const fs = fsOf()
+	if (!key || !path || !fs) return ''
+	try {
+		const map = diskIndex()
+		map[key] = { path, size: Number(size) || 0, at: Date.now() }
+		// 先按「总数 + 总字节」淘汰最久没看的
+		let keys = Object.keys(map).sort((a, b) => (map[a].at || 0) - (map[b].at || 0))
+		let total = keys.reduce((sum, k) => sum + (Number(map[k].size) || 0), 0)
+		while (keys.length > DISK_MAX_COUNT || total > DISK_MAX_BYTES) {
+			const oldest = keys.shift()
+			if (oldest === key) break
+			total -= Number(map[oldest].size) || 0
+			try {
+				fs.unlinkSync(map[oldest].path)
+			} catch (e) {}
+			delete map[oldest]
+		}
+		diskSaveIndex(map)
+		return path
+	} catch (e) {
+		return ''
+	}
+}
+
+function diskDrop(id) {
+	const key = String(id || '')
+	if (!key) return
+	const map = diskIndex()
+	const hit = map[key]
+	if (!hit) return
+	const fs = fsOf()
+	try {
+		if (fs && hit.path) fs.unlinkSync(hit.path)
+	} catch (e) {}
+	delete map[key]
+	diskSaveIndex(map)
+}
+
+/** 把 base64 直接写成一个缓存文件（比先造 data URI 再落盘省一次大字符串） */
+function writeB64ToDisk(id, b64, mime) {
+	const fs = fsOf()
+	const base = userDataPath()
+	if (!fs || !base || !b64) return ''
+	const ext = /png/i.test(mime || '') ? 'png' : 'jpg'
+	const dir = base + '/imgcache'
+	try {
+		fs.accessSync(dir)
+	} catch (e) {
+		try {
+			fs.mkdirSync(dir, true)
+		} catch (e2) {}
+	}
+	const name = dir + '/' + String(id).replace(/[^a-zA-Z0-9]/g, '').slice(-40) + '-' + Date.now() + '.' + ext
+	try {
+		fs.writeFileSync(name, b64, 'base64')
+		const st = fs.statSync(name)
+		if (!st || !st.size) throw new Error('empty')
+		return diskPut(id, name, st.size)
+	} catch (e) {
+		return ''
+	}
+}
+
+/**
+ * 预取一批图（并行 2 个）。
+ * 列表页/聊天页一进来就有多张图要画时用它，别一张一张串行等。
+ *
+ * 返回 { [fileID]: src }，失败的键不出现在结果里。
+ */
+export async function prefetchImages(role, ids, opts = {}) {
+	const list = Array.from(new Set((ids || []).filter((id) => typeof id === 'string' && /^cloud:\/\/|^https?:\/\//.test(id))))
+	const out = {}
+	if (!list.length) return out
+	const limit = Math.max(1, Math.min(3, Number(opts.concurrency) || 2))
+	// 磁盘里已有的直接命中，剩下的才发请求
+	const todo = []
+	for (const id of list) {
+		const hit = diskGet(id)
+		if (hit) {
+			out[id] = hit
+			continue
+		}
+		todo.push(id)
+	}
+	let cursor = 0
+	const worker = async () => {
+		while (cursor < todo.length) {
+			const id = todo[cursor++]
+			try {
+				const r = await resolveImageSrc(role, id, opts)
+				if (r && r.src) out[id] = r.src
+			} catch (e) {
+				// 单张失败不影响其它图
+			}
+		}
+	}
+	const workers = []
+	for (let i = 0; i < Math.min(limit, todo.length); i++) workers.push(worker())
+	await Promise.all(workers)
+	return out
+}
+
 /** 最近解出来的图片地址缓存：同一个 fileID 不重复取（预览和气泡共用） */
 const srcCache = new Map()
 const SRC_CACHE_MAX = 16
@@ -263,11 +421,23 @@ export async function resolveImageSrc(role, fileID, opts = {}) {
 		return { src, method, errors }
 	}
 
+	// 0. 磁盘里已经有这张图：本地文件路径，秒开，setData 只有一个短字符串
+	if (!skip.disk) {
+		const cached = diskGet(id)
+		if (cached) return hit(cached, 'disk')
+	}
+
 	if (!skip.data) {
 		try {
 			const uri = await fetchImageData(role, id)
-			// data URI 太大时微信会直接不画（setData 单次上限 1MB），宁可走落盘
 			const maxLen = Number(opts.maxDataLen) || 900000
+			// 超过这个长度就别塞进 setData 了，直接落盘用本地路径（真机渲染快很多）
+			const fileThreshold = Number(opts.fileThreshold) || 220000
+			const b64 = uri && uri.indexOf('base64,') >= 0 ? uri.slice(uri.indexOf('base64,') + 7) : ''
+			if (b64 && (opts.preferFile || uri.length > fileThreshold)) {
+				const path = writeB64ToDisk(id, b64, 'image/jpeg')
+				if (path) return hit(path, 'file')
+			}
 			if (uri && uri.length <= maxLen) return hit(uri, 'data')
 			if (uri) errors.push('直读:图片太大（' + Math.round(uri.length / 1024) + 'KB）')
 		} catch (e) {
@@ -278,7 +448,11 @@ export async function resolveImageSrc(role, fileID, opts = {}) {
 	if (!skip.file) {
 		try {
 			const path = await fetchImageToTempFile(role, id)
-			if (path) return hit(path, 'file')
+			if (path) {
+				// 已经在硬盘上了，顺手登记进缓存索引，下次直接命中
+				const cachedPath = diskPut(id, path, 0)
+				return hit(cachedPath || path, 'file')
+			}
 		} catch (e) {
 			errors.push('落盘:' + ((e && e.message) || '失败'))
 		}
@@ -298,74 +472,34 @@ export async function resolveImageSrc(role, fileID, opts = {}) {
 
 /** 清掉某张图的缓存（点「重试」时用） */
 export function forgetImageSrc(fileID) {
-	srcCache.delete(String(fileID || '').trim())
+	const id = String(fileID || '').trim()
+	srcCache.delete(id)
+	diskDrop(id)
 }
 
 /**
- * 分片取原图，最后一次性写成本地文件。
+ * 把原图落成本地文件，返回本地路径。
  *
- * 之前是每片 appendFileSync(base64) —— 微信的 appendFile 对 base64 解码并不可靠，
- * 多片拼出来的文件会坏掉，表现就是「小图能看、大图全黑 + 原图显示失败」。
- * 现在改成：分片取回先拼 base64，最后 writeFileSync 一次写入，并校验文件大小；
- * 写失败再退一步用 base64ToArrayBuffer 写。
+ * 直接复用 fetchImageData（它已经做了分片并发 + 磁盘缓存），
+ * 老版本这里是自己串行 for 循环分片，一张 600KB 的图要两个来回，慢一倍。
  */
-export function fetchImageToTempFile(role, fileID) {
-	return new Promise((resolve, reject) => {
-		const id = String(fileID || '').trim()
-		const isRef = /^cloud:\/\//.test(id) || /^https?:\/\//.test(id)
-		if (!isRef) return reject(new Error('图片地址无效'))
-		const fs = typeof wx !== 'undefined' && wx.getFileSystemManager ? wx.getFileSystemManager() : null
-		const base = (typeof wx !== 'undefined' && wx.env && wx.env.USER_DATA_PATH) || ''
-		if (!fs || !base) return reject(new Error('当前环境不支持保存图片'))
+export async function fetchImageToTempFile(role, fileID) {
+	const id = String(fileID || '').trim()
+	const isRef = /^cloud:\/\//.test(id) || /^https?:\/\//.test(id)
+	if (!isRef) throw new Error('图片地址无效')
+	const fs = typeof wx !== 'undefined' && wx.getFileSystemManager ? wx.getFileSystemManager() : null
+	const base = (typeof wx !== 'undefined' && wx.env && wx.env.USER_DATA_PATH) || ''
+	if (!fs || !base) throw new Error('当前环境不支持保存图片')
 
-		const api = apiOf(role)
-		const filePath = `${base}/img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`
-		const parts = []
-		let offset = 0
-		let total = 0
-
-		const run = async () => {
-			try {
-				for (let i = 0; i < 80; i++) {
-					const res = await api.getImageData(id, offset)
-					if (!res || res.code !== 0) throw new Error((res && res.msg) || '图片读取失败')
-					const d = res.data || {}
-					if (!d.base64) throw new Error('图片数据为空')
-					parts.push(d.base64)
-					total = Number(d.size) || total
-					// 兼容旧版云函数（整张图一次返回）
-					if (d.chunk === undefined || d.done === undefined) break
-					offset = Number(d.offset) + Number(d.chunk)
-					if (d.done) break
-					if (!d.chunk) throw new Error('图片分片异常')
-				}
-
-				const b64 = parts.join('')
-				let wrote = false
-				try {
-					fs.writeFileSync(filePath, b64, 'base64')
-					wrote = true
-				} catch (e) {
-					wrote = false
-				}
-				if (!wrote && typeof wx !== 'undefined' && wx.base64ToArrayBuffer) {
-					fs.writeFileSync(filePath, wx.base64ToArrayBuffer(b64))
-					wrote = true
-				}
-				if (!wrote) throw new Error('图片写入本地失败')
-
-				// 校验大小：多片拼接如果出错，这里能立刻发现，而不是丢给 <image> 黑屏
-				const st = fs.statSync(filePath)
-				if (total && st && st.size !== total) {
-					throw new Error('图片不完整（' + st.size + '/' + total + '）')
-				}
-				resolve(filePath)
-			} catch (e) {
-				reject(e instanceof Error ? e : new Error('图片读取失败'))
-			}
-		}
-		run()
-	})
+	const uri = await fetchImageData(role, id)
+	const i = uri.indexOf('base64,')
+	if (i < 0) throw new Error('图片数据为空')
+	const b64 = uri.slice(i + 7)
+	if (!b64) throw new Error('图片数据为空')
+	const mime = uri.slice(5, i).replace(';', '') || 'image/jpeg'
+	const path = writeB64ToDisk(id, b64, mime)
+	if (!path) throw new Error('图片写入本地失败')
+	return path
 }
 
 /**

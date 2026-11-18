@@ -90,7 +90,7 @@
 	 */
 	const QUICK = ['我快到了', '放门口就行', '在楼下等你', '稍等一下']
 
-	import { uploadImage, thumbDataUri, resolveImageSrc } from '@/common/image.js'
+	import { uploadImage, thumbDataUri, resolveImageSrc, prefetchImages } from '@/common/image.js'
 
 	function pad(n) {
 		return n < 10 ? '0' + n : '' + n
@@ -310,17 +310,13 @@
 					.filter((m) => m.type === 'image' && typeof m.content === 'string' && m.content.indexOf('cloud://') === 0)
 					.map((m) => m.content)
 					.filter((id) => !displayable(this.imgMap[id]))))
-				if (!ids.length) return
-				// 一次最多补 3 张，别把聊天页拖慢
-				for (const id of ids.slice(0, 3)) {
-					let r = { src: '', errors: [] }
-					try {
-						r = await resolveImageSrc(this.role, id)
-					} catch (e) {
-						r.errors = [(e && e.message) || '图片读取失败']
-					}
-					if (r.src) {
-						this.imgMap = Object.assign({}, this.imgMap, { [id]: r.src })
+				// 一次最多补 4 张，并行取（串行时 4 张就是 4 个来回）
+				const todo = ids.slice(0, 4)
+				const map = await prefetchImages(this.role, todo, { concurrency: 2 })
+				for (const id of todo) {
+					const src = map[id]
+					if (src) {
+						this.imgMap = Object.assign({}, this.imgMap, { [id]: src })
 						this.messages.forEach((m) => {
 							if (m.type === 'image' && m.content === id) {
 								m._imgFailed = false
@@ -332,7 +328,7 @@
 						this.messages.forEach((m) => {
 							if (m.type === 'image' && m.content === id) {
 								m._imgFailed = true
-								m._imgErr = (r.errors || []).join('；')
+								m._imgErr = '图片读取失败'
 							}
 						})
 					}
