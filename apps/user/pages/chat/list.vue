@@ -1,7 +1,7 @@
 <template>
 	<view class="list-page">
 		<view class="list" v-if="conversations.length">
-			<view class="conv" v-for="(c, i) in conversations" :key="i" :data-idx="i" @click="openRow">
+			<view class="conv" v-for="(c, i) in conversations" :key="c.rowKey" :data-idx="i" @click="openRow">
 				<view class="conv-avatar" :style="{ background: colorOf(c.peer && c.peer.nickname) }">
 					<image v-if="avatarOf(c.peer)" class="conv-avatar-img" :src="avatarOf(c.peer)" mode="aspectFill"></image>
 					<text v-else>{{ initial(c.peer && c.peer.nickname) }}</text>
@@ -33,6 +33,8 @@
 </template>
 
 <script>
+	import { errText } from '@/common/rider-util.js'
+
 	function pad(n) {
 		return n < 10 ? '0' + n : '' + n
 	}
@@ -72,9 +74,15 @@
 				try {
 					const res = await this.api().listChats()
 					if (res.code !== 0) throw new Error(res.msg)
-					this.conversations = (res.data && res.data.list) || []
+					// rowKey 只给 wx:key 用：小程序不认 index，也不认 || 表达式，
+					// 统一在这里算好，模板里就一个普通字段。
+					this.conversations = ((res.data && res.data.list) || []).map((c, i) => ({
+						...c,
+						rowKey: (c && (c.peer_id || c.task_id)) || 'row_' + i
+					}))
 				} catch (e) {
-					uni.showToast({ title: (e && e.message) || '加载失败', icon: 'none' })
+					console.warn('[chat] 会话列表加载失败：', errText(e))
+					uni.showToast({ title: errText(e, '加载失败'), icon: 'none' })
 				} finally {
 					this.loading = false
 				}

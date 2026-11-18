@@ -348,7 +348,7 @@ export default {
 					uni.setStorageSync('userInfo', this.userInfo)
 				}
 			} catch (e) {
-				console.error('加载用户信息失败', e)
+				console.error('加载用户信息失败：', errText(e, '加载失败'))
 				const stored = uni.getStorageSync('userInfo')
 				if (stored && Object.keys(stored).length > 0) {
 					this.userInfo = {

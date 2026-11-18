@@ -266,5 +266,21 @@ export function copyText(text, tip) {
 /** 统一取错误提示文案（云端返回的 msg 在 store 里已经抛成 Error.message） */
 export function errText(e, fallback) {
 	if (!e) return fallback || '操作失败'
-	return e.message || e.errMsg || fallback || '操作失败'
+	const raw = String(e.message || e.errMsg || '')
+	// 平台级报错对用户没有意义（也没法自己解决），换成人话；
+	// 但原文照旧留在 console 里，排查时照着搜就行。
+	if (/Env状态异常|env不合法|FUNCTION_NOT_FOUND|环境.*异常/i.test(raw)) {
+		return '服务暂时不可用，请稍后再试'
+	}
+	if (/token[\s_-]*(无效|过期|expired|invalid)|check-token-failed/i.test(raw)) {
+		return '登录状态已过期，请重新进入小程序'
+	}
+	if (/timeout|超时|ETIMEDOUT/i.test(raw)) {
+		return '网络超时，请检查网络后重试'
+	}
+	if (/^\[[^\]]+\]:\s*/.test(raw)) {
+		// 去掉「[云对象名]: 」前缀，只留消息
+		return raw.replace(/^\[[^\]]+\]:\s*/, '') || fallback || '操作失败'
+	}
+	return raw || fallback || '操作失败'
 }

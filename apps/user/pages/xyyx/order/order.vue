@@ -60,6 +60,7 @@
 
 <script>
 	import { mapGetters, mapActions } from 'vuex'
+	import { errText } from '@/common/rider-util.js'
 	import OrderListItem from '../components/order-list-item.vue'
 
 	export default {
@@ -166,7 +167,7 @@
 				try {
 					await this.fetchMyTasks()
 				} catch (e) {
-					console.error('加载订单失败', e)
+					console.error('加载订单失败：', errText(e, '加载失败'))
 				} finally {
 					this.loading = false
 				}
