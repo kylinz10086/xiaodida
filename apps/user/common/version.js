@@ -6,10 +6,10 @@
  * 构建时间仍记录在 BUILD_STAMP 里，只出现在「点版本号」的详情弹窗，用来排查
  * 「手机上跑的是不是最新那个包」。
  */
-export const APP_VERSION = '1.2.14'
+export const APP_VERSION = '1.2.15'
 
 /** 每次构建改一下（月-日 时:分）。只给详情弹窗用，不出现在版本号文案里 */
-export const BUILD_STAMP = '11-18 20:23'
+export const BUILD_STAMP = '11-19 19:15'
 
 const ENV_TEXT = { develop: '开发版', trial: '体验版', release: '正式版' }
 
