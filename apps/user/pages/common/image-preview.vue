@@ -2,7 +2,15 @@
 	<view class="pv" @click="close">
 		<swiper class="pv-swiper" :current="current" @change="onChange" :circular="false">
 			<swiper-item v-for="(it, i) in list" :key="i" class="pv-item">
-				<image class="pv-img" :src="srcOf(it)" mode="aspectFit" @click.stop="close" @error="onImgError(it)"></image>
+				<!-- 原图取不到时不要给黑屏：有缩略图就先放大缩略图，连缩略图都没有才显示占位卡片 -->
+				<image v-if="srcOf(it)" class="pv-img" :src="srcOf(it)" mode="aspectFit" @click.stop="close"
+					@error="onImgError(it)"></image>
+				<view v-else class="pv-empty" @click.stop>
+					<text class="pv-empty-title">这张图打不开</text>
+					<text class="pv-empty-sub">{{ whyOf(it) || '图片数据已丢失' }}</text>
+					<view class="pv-empty-btn" @click.stop="retry">重新加载</view>
+				</view>
+				<text v-if="thumbOnly(it)" class="pv-badge">原图已失效 · 当前是缩略图</text>
 			</swiper-item>
 		</swiper>
 
@@ -43,15 +51,18 @@
 				// 走的是哪条路（短暂显示后就隐藏，别一直挂着）
 				label: '',
 				// 打不开的具体原因（三条路各自的报错），显示在提示条上便于报障
-				why: {}
+				why: {},
+				// 连缩略图都画不出来（原图、缩略图全挂）
+				thumbBroken: {}
 			}
 		},
 		computed: {
 			tipText() {
 				const it = this.list[this.current]
 				if (it && it.fileID && this.broken[it.fileID]) {
-					const why = (this.why[it.fileID] || '').slice(0, 30)
-					return why ? '打不开（' + why + '）· 点此重试' : '打不开 · 点此重试'
+					// 还有缩略图就不是「打不开」，只是原图没了
+					if (this.srcOf(it) && !this.thumbBroken[it.fileID]) return '原图已失效 · 可点此重试'
+					return '打不开 · 点此重试'
 				}
 				return this.label
 			},
@@ -72,7 +83,24 @@
 			srcOf(it) {
 				if (!it) return ''
 				if (it.fileID && this.full[it.fileID]) return this.full[it.fileID]
+				if (it.fileID && this.thumbBroken[it.fileID]) return ''
 				return it.src || ''
+			},
+			/** 现在显示的是缩略图（原图取不到） */
+			thumbOnly(it) {
+				if (!it || !it.fileID) return false
+				if (this.full[it.fileID] || this.thumbBroken[it.fileID]) return false
+				return !!(this.broken[it.fileID] && it.src)
+			},
+			/** 把服务端那串报错翻译成人话 */
+			whyOf(it) {
+				if (!it || !it.fileID) return ''
+				const raw = String(this.why[it.fileID] || '')
+				if (!raw) return ''
+				if (/0B|内容异常|不存在|已被删除/.test(raw)) return '云存储里已经没有这张图了，只能让对方重发'
+				if (/token|登录/.test(raw)) return '登录状态失效，重新进一次小程序再试'
+				if (/超时|timeout/i.test(raw)) return '网络超时，稍后再试'
+				return raw.slice(0, 40)
 			},
 			onChange(e) {
 				this.current = (e && e.detail && e.detail.current) || 0
@@ -87,6 +115,13 @@
 				if (!it || !it.fileID) return
 				const cur = this.list[this.current]
 				if (!cur || cur.fileID !== it.fileID) return
+				// 刚才画的是原图 → 换路径重试；刚才画的就是缩略图 → 连缩略图都坏了，给占位卡片
+				if (!this.full[it.fileID]) {
+					this.$set(this.thumbBroken, it.fileID, true)
+					this.$set(this.broken, it.fileID, true)
+					if (!this.why[it.fileID]) this.$set(this.why, it.fileID, '缩略图也画不出来')
+					return
+				}
 				const used = this.method[it.fileID]
 				if (used) this.$set(this.failed, it.fileID, used)
 				this.$delete(this.full, it.fileID)
@@ -136,6 +171,7 @@
 				const it = this.list[this.current]
 				if (!it || !it.fileID) return
 				forgetImageSrc(it.fileID)
+				this.$delete(this.thumbBroken, it.fileID)
 				this.$delete(this.full, it.fileID)
 				this.$delete(this.failed, it.fileID)
 				this.$delete(this.method, it.fileID)
@@ -162,6 +198,50 @@
 		top: 0;
 		bottom: 0;
 		background: #000;
+	}
+
+	/* 原图和缩略图都取不到时的占位卡片，别给用户看黑屏 */
+	.pv-empty {
+		position: absolute;
+		left: 0;
+		right: 0;
+		top: 36%;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		padding: 0 60rpx;
+	}
+
+	.pv-empty-title { font-size: 30rpx; color: #e8eaee; }
+
+	.pv-empty-sub {
+		margin-top: 14rpx;
+		font-size: 23rpx;
+		line-height: 1.6;
+		color: #8b9099;
+		text-align: center;
+	}
+
+	.pv-empty-btn {
+		margin-top: 28rpx;
+		padding: 12rpx 40rpx;
+		border: 1rpx solid #4a4f57;
+		border-radius: 999rpx;
+		font-size: 24rpx;
+		color: #cfd3d9;
+	}
+
+	/* 原图失效、正在放大缩略图时给个提示，别让人以为图就是这么糊 */
+	.pv-badge {
+		position: absolute;
+		left: 50%;
+		bottom: 130rpx;
+		transform: translateX(-50%);
+		padding: 8rpx 22rpx;
+		background: rgba(0, 0, 0, 0.55);
+		border-radius: 999rpx;
+		font-size: 21rpx;
+		color: #ffd9a8;
 	}
 
 	.pv-swiper {
